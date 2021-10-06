@@ -3,6 +3,8 @@
 In this repo you find the source code for my *Best Improvement v1.5* board, a better board with better firmware to control the Best BST-863 hot air station.
 This is for v1.5 only (RP2040 microcontroller), if you are looking for v1 (STM32) click [here](https://github.com/RandomHacks-Git/Best-Improvement-STM32). 
 
+![DSC00115](https://user-images.githubusercontent.com/22402348/136259204-6c987a80-4cb0-4a1a-9c3d-fa8ca86fb33c.jpg)
+
 You can buy the board on my [tindie store](https://www.tindie.com/stores/randomhacks).
 
 ## Presentation
