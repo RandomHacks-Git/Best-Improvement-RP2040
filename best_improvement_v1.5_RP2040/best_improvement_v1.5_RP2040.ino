@@ -1,4 +1,4 @@
-//uses core https://github.com/earlephilhower/arduino-pico 1.9.2 (timers are broken on subsequent versions atleast up to 1.9.4)
+//uses core https://github.com/earlephilhower/arduino-pico 1.9.5 flashed as Generic RP2040 with all default settings
 
 #include <Wire.h> //for touch ic
 #include <EEPROM.h>
