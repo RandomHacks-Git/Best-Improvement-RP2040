@@ -1,10 +1,12 @@
-//uses core https://github.com/earlephilhower/arduino-pico 1.9.5 flashed as Generic RP2040 with all default settings
+//uses core https://github.com/earlephilhower/arduino-pico 1.9.5, Generic RP2040 - all other settings untouched default
 
 #include <Wire.h> //for touch ic
 #include <EEPROM.h>
 #include "ht1621.h" //LCD controller https://github.com/altLab/HT1621
 #include "max6675.h" //https://learn.adafruit.com/thermocouple/arduino-code
 #include <PID_v1.h> //https://github.com/br3ttb/Arduino-PID-Library 
+//#define TIMER_INTERRUPT_DEBUG         1
+//#define _TIMERINTERRUPT_LOGLEVEL_     4
 #include "RPi_Pico_TimerInterrupt.h" //https://github.com/khoih-prog/RPI_PICO_TimerInterrupt
 #include <RunningMedian.h> //https://github.com/RobTillaart/RunningMedian
 
@@ -42,7 +44,7 @@ HT1621 ht(14, 13, 12, 11); // LCD data,wr,rd,cs
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 //Miscellaneous
-#define FIRMWARE_VERSION 101 //firmware version (1.00)
+#define FIRMWARE_VERSION 101 //firmware version (1.01)
 #define DEBOUNCETIME 10 //button debounce time
 #define LCDBRIGHTNESS 60 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
 #define LCDBRIGHTNESSDIM 100 //standby brightness
@@ -77,11 +79,10 @@ unsigned long lastTempRead;
 unsigned long lastTempIcon;
 unsigned long lastSerialOutput;
 volatile bool reedStatus;
-bool btn1, btn2, btn3;
+volatile bool btn1, btn2, btn3;
 volatile unsigned long btnMillis, reedMillis;
 volatile bool buttonFlag;
 volatile bool toneFlag, longToneFlag;
-unsigned long lastToneMillis;
 volatile bool reedFlag;
 volatile byte touchedButton;
 volatile bool readTouchFlag;
@@ -111,7 +112,8 @@ byte selectedSection;
 unsigned long lastBlink;
 bool sectionOff;
 bool switchDisplayed;
-bool displayingVersion = 1;
+bool displayingVersion = true;
+bool eepromFlag;
 
 struct chSettings {
   unsigned short temp;
@@ -123,13 +125,13 @@ struct otherSettings {
   bool buzzer;
   byte selectedCh;
   short calTemp; //temperature calibration value, can be negative or positive
-  bool serialOutput = 1;
+  bool serialOutput;
 };
 
 chSettings ch1Settings, ch2Settings, ch3Settings, touchSettings;
 otherSettings otherSettings;
 
-unsigned int eepromCheck = 1234567890; //used in setup to check if settings where previously saved to flash (emulated eeprom)
+unsigned int eepromCheck = 1234567899; //used in setup to check if settings where previously saved to flash (emulated eeprom)
 
 //PID
 //P - how fast it shoots towards set point, if set too high creates overshoot, I - remove oscillations and offset, can increase overshoot D - like a break, removes overshoot, if set too high leads to unresponsiveness
@@ -143,55 +145,48 @@ PID myPID(&input, &output, &setPoint, KP, KI, KD, P_ON_E, DIRECT);
 // Init RPI_PICO_Timer
 RPI_PICO_Timer ITimer(3);
 
-RunningMedian samples = RunningMedian(10); //used for the temperature potentiometer analogRead
+RunningMedian samples = RunningMedian(8); //used for the temperature potentiometer analogRead
+RunningMedian samples2 = RunningMedian(8); //used for the blower potentiometer analogRead
+
+void loadDefaults() {
+  ch1Settings.temp = 200;
+  ch1Settings.blow = 100;
+  ch2Settings.temp = 360;
+  ch2Settings.blow = 50;
+  ch3Settings.temp = 500;
+  ch3Settings.blow = 70;
+  //    ch1Settings = {200, 100};
+  //    ch2Settings = {360, 50};
+  //    ch3Settings = {500, 70};
+  otherSettings.tempUnit = 1;
+  otherSettings.buzzer = 1;
+  otherSettings.selectedCh = 1;
+  otherSettings.calTemp = 7;
+  otherSettings.serialOutput = 0;
+
+  EEPROM.put(4, ch1Settings);
+  EEPROM.put(8, ch2Settings);
+  EEPROM.put(12, ch3Settings);
+  EEPROM.put(16, touchSettings);
+  EEPROM.put(20, otherSettings);
+  EEPROM.put(30, eepromCheck);
+  EEPROM.commit();
+  Serial.println("Default settings loaded and saved to EEPROM");
+  tone(PIEZO, 7000, 300);
+}
 
 void setup() {
+  Serial.begin(115200);
+  EEPROM.begin(128);
   analogWriteFreq(20000); //20kHz PWM freq
   analogWriteRange(100); //because I'm using percentages, this makes it easier
-  Serial.begin(115200);
-  EEPROM.begin(512);
-  unsigned int tempEepromCheck;
-  EEPROM.get(0, tempEepromCheck);
-  if (tempEepromCheck == eepromCheck) { //checks if the variable eepromCheck is already stored in flash, if it is,reads the settings else stores them.
-    EEPROM.get(4, ch1Settings);
-    EEPROM.get(8, ch2Settings);
-    EEPROM.get(12, ch3Settings);
-    EEPROM.get(16, touchSettings);
-    EEPROM.get(20, otherSettings);
-    Serial.println("Settings loaded from EEPROM");
-  }
-  else {
-    ch1Settings.temp = 200;
-    ch1Settings.blow = 100;
-    ch2Settings.temp = 360;
-    ch2Settings.blow = 50;
-    ch3Settings.temp = 500;
-    ch3Settings.blow = 70;
-    //    ch1Settings = {200, 100};
-    //    ch2Settings = {360, 50};
-    //    ch3Settings = {500, 70};
-    otherSettings.tempUnit = 1;
-    otherSettings.buzzer = 1;
-    otherSettings.selectedCh = 1;
-    otherSettings.calTemp = 7;
-    otherSettings.serialOutput = 0;
-
-    EEPROM.put(4, ch1Settings);
-    EEPROM.put(8, ch2Settings);
-    EEPROM.put(12, ch3Settings);
-    EEPROM.put(16, touchSettings);
-    EEPROM.put(20, otherSettings);
-    EEPROM.put(0, eepromCheck);
-    EEPROM.commit();
-    Serial.println("Default settings saved to EEPROM");
-  }
 
   //initialize pins
   pinMode(BACKLIGHT, OUTPUT);   //initialize backlight pin
   analogWrite(BACKLIGHT, 100); //backlight off until initializing LCD
   pinMode(PIEZO, OUTPUT);
   pinMode(BLOWER, OUTPUT);
-  analogWrite(BLOWER, 100); //turn on blower to get a more accurate reading of the temperature (in case there was a short power failure or you turned off the station while it was still hot the blower will turn on to avoid damage to the heater element/handle)
+  analogWrite(BLOWER, 60); //turn on blower to get a more accurate reading of the temperature (in case there was a short power failure or you turned off the station while it was still hot the blower will turn on to avoid damage to the heater element/handle) 
   pinMode(HEATER, OUTPUT);
   pinMode(AHEAT, INPUT);
   pinMode(ABLOW, INPUT);
@@ -201,6 +196,27 @@ void setup() {
   pinMode(REEDINT, INPUT_PULLUP);
   pinMode(TOUCHINT, INPUT);
 
+  bool defaultsLoaded = 0;
+  delay(30); //let pins stabilize
+  if (!digitalRead(BTN1) && !digitalRead(BTN3)) { //loads default settings if buttons 1 and 3 are pressed simultaneously while powering on the station
+    loadDefaults();
+    defaultsLoaded = true;
+  }
+
+  unsigned int tempEepromCheck;
+
+  if (!defaultsLoaded) {
+    EEPROM.get(30, tempEepromCheck);
+    if (tempEepromCheck == eepromCheck) { //checks if the variable eepromCheck is already stored in flash, if it is,reads the settings else stores them.
+      EEPROM.get(4, ch1Settings);
+      EEPROM.get(8, ch2Settings);
+      EEPROM.get(12, ch3Settings);
+      EEPROM.get(16, touchSettings);
+      EEPROM.get(20, otherSettings);
+      Serial.println("Settings loaded from EEPROM");
+    }
+    else loadDefaults();
+  }
 
   //initialize LCD
   ht.begin();
@@ -303,7 +319,7 @@ void setup() {
   Wire.write(byte(0x00));// Set to work mode (0x00)
   Wire.endTransmission();
 
-  delay(600); //so temperature reaches the thermocouple for a more accurate reading
+  delay(550); //so temperature reaches the thermocouple for a more accurate reading
   currentTemp = readTemp(1);
   if (currentTemp > SHUTDOWNTEMP + 20) {
     analogWrite(BLOWER, 100); //turn on blower at max
@@ -345,18 +361,24 @@ void loop() {
   if (toneFlag) {
     tone(PIEZO, 7000, 100);
     toneFlag = false;
-    lastToneMillis = millis(); //tone interferes with the analog readings so I'm using this do ignore the readings while buzzer is beeping
-  }
+   }
 
   if (longToneFlag) {
     tone(PIEZO, 6000, 800);
     longToneFlag = false;
-    lastToneMillis = millis(); //tone interferes with the analog readings so I'm using this do ignore the readings while buzzer is beeping
-  }
+      }
 
   if (readTouchFlag) { //read which button was touched
     touchedButton = readTouch();
     readTouchFlag = false;
+  }
+
+  if (eepromFlag && millis() - potMillis > 100) { //this is used for defineBlower() and defineTemp() the reason I don't immediately write the channel setting to eeprom is because ocasionally it might happen that when turning the station off a change on the analog pins is detected and because there isn't enough time to write to eeprom before RP2040 completely loses power the flash ends up corrupted, having this delay solves the issue
+    if (otherSettings.selectedCh == 0) { //check if the channel hasn't changed in the meantime
+      EEPROM.put(20, otherSettings);
+      EEPROM.commit();
+    }
+    eepromFlag = false;
   }
 
   if (reedFlag) {
@@ -371,7 +393,6 @@ void loop() {
       ht.writeMem(23, 0b1000); //thermometer icon on
     }
     else { //in base, reset LCD values and set blower to max
-      ////timerSecondsdetachInterrupt(TIMER_CH2);
       ITimer.detachInterrupt();
       changeSegment(31, 2, 0); //turn off iron icon
       myPID.SetMode(MANUAL); //turn off PID
@@ -443,20 +464,16 @@ void loop() {
 
   if (buttonFlag) handleButton(); //check which button was pressed (channel buttons)
 
-  if (millis() - lastAnalogCheck >=  20) { //read pots
+  if (millis() - lastAnalogCheck >= 20) { //read pots median ignores noisy readings
     unsigned short analogHeat = analogRead(AHEAT);
-    //Serial.println(analogHeat);
     samples.add(analogHeat);
     analogHeat = samples.getMedian();
-    unsigned short analogBlow = analogRead(ABLOW);
     if (abs(analogHeat - heaterVal) > 5) defineTemp();
-    if (abs(analogBlow - blowerVal) > 30) defineBlower();
+    unsigned short analogBlow = analogRead(ABLOW);
+    samples2.add(analogBlow);
+    analogBlow = samples2.getMedian();
+    if (abs(analogBlow - blowerVal) > 25) defineBlower();
     lastAnalogCheck = millis();
-  }
-
-  if (setPointReached && newPotValue && millis() - potMillis >= 1000) { //because the temperature changes almost instantly I only change the setPoinReached bool if the last time I moved a pot was atleast a second ago, otherwise the buzzer would beep while I was still changing the temperature
-    setPointReached = false;
-    newPotValue = false;
   }
 
   if (heating && reedStatus && (setBlow != lastSetBlow)) { //commit new pwm for blower
@@ -548,12 +565,9 @@ void loop() {
     printNumber(LEFT, setBlow); //print blower value on left section
     if (otherSettings.buzzer) { //if sound is active buzz
       tone(PIEZO, 1000, 100);
-      lastToneMillis = millis();
     }
     setPointReachedTime = millis();
     timerTemporary = setTimer;
-    //    //timerSecondsrefresh();
-    //    //timerSecondsattachInterrupt(TIMER_CH2, timerHandler);
     ITimer.attachInterrupt(TIMER_FREQ_HZ, timerHandler);
     changeSegment(10, 3, 1); //enable S icon
     timerFlag = true;

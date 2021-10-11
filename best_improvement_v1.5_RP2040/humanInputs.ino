@@ -21,7 +21,6 @@ void reactTouch() { //take action according to touched key
         delay(70);
         tone(PIEZO, 5000, 100);
         lastReact = millis();
-        lastToneMillis = millis();
       }
       touched = false;
     }
@@ -38,13 +37,11 @@ void reactTouch() { //take action according to touched key
       tone(PIEZO, 4000, 70);
       delay(70);
       tone(PIEZO, 5000, 100);
-      lastToneMillis = millis();
     }
     else { //no sound, flash backlight instead?
       tone(PIEZO, 5000, 70);
       delay(70);
       tone(PIEZO, 4000, 100);
-      lastToneMillis = millis();
     }
     EEPROM.put(20, otherSettings);
     EEPROM.commit();
@@ -88,7 +85,6 @@ void reactTouch() { //take action according to touched key
         setTemp = handleTempUnit(MAXTEMP, otherSettings.tempUnit);
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       printNumber(MAIN, setTemp);
@@ -104,7 +100,6 @@ void reactTouch() { //take action according to touched key
         setBlow = MAXBLOW;
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       printNumber(LEFT, setBlow);
@@ -120,7 +115,6 @@ void reactTouch() { //take action according to touched key
         setTimer = 999;
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       timer = true;
@@ -150,7 +144,6 @@ void reactTouch() { //take action according to touched key
       if (otherSettings.calTemp < 50)otherSettings.calTemp += 1;
       else if (otherSettings.buzzer) {
         tone(PIEZO, 1000, 100);
-        lastToneMillis = millis();
       }
       if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function, also below
       else printNumber(LEFT, otherSettings.calTemp * 1.8);
@@ -170,7 +163,6 @@ void reactTouch() { //take action according to touched key
         setTemp = handleTempUnit(MINTEMP, otherSettings.tempUnit);
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       printNumber(MAIN, setTemp);
@@ -186,7 +178,6 @@ void reactTouch() { //take action according to touched key
         setBlow = MINBLOW;
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       printNumber(LEFT, setBlow);
@@ -207,7 +198,6 @@ void reactTouch() { //take action according to touched key
         changeSegment(16, 3, 1); //enable OFF icon
         if (otherSettings.buzzer) {
           tone(PIEZO, 1000, 100);
-          lastToneMillis = millis();
         }
       }
       timerTemporary = setTimer;
@@ -231,7 +221,6 @@ void reactTouch() { //take action according to touched key
       if (otherSettings.calTemp > -50) otherSettings.calTemp -= 1;
       else if (otherSettings.buzzer) {
         tone(PIEZO, 1000, 100);
-        lastToneMillis = millis();
       }
       if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function
       else printNumber(LEFT, otherSettings.calTemp * 1.8);
@@ -294,7 +283,6 @@ void reactTouch() { //take action according to touched key
     }
     if (otherSettings.buzzer) {
       tone(PIEZO, 1000, 100);
-      lastToneMillis = millis();
     }
     touchedButton = 0;
     touched = false;
@@ -335,7 +323,6 @@ void handleButton() {
         tone(PIEZO, 4000, 50);
         delay(50);
         tone(PIEZO, 5000, 100);
-        lastToneMillis = millis();
       }
       buttonFlag = false;
       btn1 = 0;
@@ -377,7 +364,6 @@ void handleButton() {
         tone(PIEZO, 4000, 50);
         delay(50);
         tone(PIEZO, 5000, 100);
-        lastToneMillis = millis();
       }
       buttonFlag = false;
       btn2 = 0;
@@ -419,7 +405,6 @@ void handleButton() {
         tone(PIEZO, 4000, 50);
         delay(50);
         tone(PIEZO, 5000, 100);
-        lastToneMillis = millis();
       }
       buttonFlag = false;
       btn3 = 0;
@@ -434,14 +419,14 @@ void handleButton() {
 void defineBlower() {
   blowerVal = analogRead(ABLOW);
   //Serial.println(blowerVal);
-  byte tempMap = map(blowerVal, 7, 4083, MAXBLOW, MINBLOW);
+  //Serial.println("defineBlower");
+  byte tempMap = map(blowerVal, 15, 4065, MAXBLOW, MINBLOW);
   int change = setBlow - tempMap;
   if (millis() - potMillis <= 2000 || abs(change) >= 2) { //to avoid analogRead noise, remains responsive while turning knob but only accepts any change equal or greater than 2 if last pot change was more than 2 seconds ago
     if (otherSettings.selectedCh != 0) {
       otherSettings.selectedCh = 0;
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
       printChannel(0);
+      eepromFlag = true;
     }
     if (tempMap < MINBLOW) setBlow = MINBLOW;
     else if (tempMap > MAXBLOW) setBlow = MAXBLOW;
@@ -454,22 +439,27 @@ void defineBlower() {
 void defineTemp() {
   heaterVal = analogRead(AHEAT);
   //Serial.println(heaterVal);
-  unsigned short tempMap = map(heaterVal, 25, 4085, handleTempUnit(MAXTEMP, otherSettings.tempUnit), handleTempUnit(MINTEMP, otherSettings.tempUnit));
+  //Serial.println("defineTemp");
+  unsigned short tempMap = map(heaterVal, 15, 4075, handleTempUnit(MAXTEMP, otherSettings.tempUnit), handleTempUnit(MINTEMP, otherSettings.tempUnit));
   int change = setTemp - tempMap;
-  if (millis() - potMillis <= 2000 || abs(change) >= 2) { //to avoid analogRead noise, remains responsive while turning knob but only accepts any change equal or greater than 10 if last pot change was more than 2 seconds ago
+  if (millis() - potMillis <= 2000 || abs(change) >= 2) { //to avoid analogRead noise, remains responsive while turning knob but only accepts any change equal or greater than 2 if last pot change was more than 2 seconds ago
     if (otherSettings.selectedCh != 0) {
       otherSettings.selectedCh = 0;
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
       printChannel(0);
+      eepromFlag = true;
     }
-    if (heating && setTemp > tempMap) setPointChanged = 1;
-    else setPointChanged = 2;
+    if (heating) { 
+      if(setTemp != tempMap){
+      if (setTemp > tempMap) setPointChanged = 1;
+      else setPointChanged = 2;
+      //Serial.println(setPointChanged);
+      setPointReached = false;
+      }
+    }
     if (tempMap < handleTempUnit(MINTEMP, otherSettings.tempUnit)) setTemp = handleTempUnit(MINTEMP, otherSettings.tempUnit);
     else if (tempMap > handleTempUnit(MAXTEMP, otherSettings.tempUnit)) setTemp = handleTempUnit(MAXTEMP, otherSettings.tempUnit);
     else setTemp = tempMap;
     printNumber(MAIN, setTemp);
-    if (heating) newPotValue = true;
     potMillis = millis();
   }
 }

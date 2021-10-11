@@ -39,7 +39,7 @@ void btnAction() {
 }
 
 bool timerHandler(struct repeating_timer *t) {
-  if (timer) {
+    if (timer) {
     if (timerTemporary < setTimer || millis() - setPointReachedTime >= 900) {
       if (timerTemporary - 1 > 0) {
         timerTemporary--;
@@ -47,7 +47,6 @@ bool timerHandler(struct repeating_timer *t) {
       else {
         timerTemporary = 0; 
         if (otherSettings.buzzer)longToneFlag = true;
-        //timerSeconds.detachInterrupt(TIMER_CH2);
         ITimer.detachInterrupt();
         myPID.SetMode(MANUAL); //turn off PID
         digitalWrite(HEATER, LOW); //turn off heater
