@@ -14,8 +14,7 @@ void reactTouch() { //take action according to touched key
     if (!selectedSection) {
       otherSettings.serialOutput = !otherSettings.serialOutput;
       changeSegment(7, 1, otherSettings.serialOutput); //turn "RS232 On" segment on LCD on or off depending on serialOutput bool status
-      EEPROM.put(20, otherSettings); //save to eeprom
-      EEPROM.commit();
+      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 70);
         delay(70);
@@ -43,8 +42,7 @@ void reactTouch() { //take action according to touched key
       delay(70);
       tone(PIEZO, 4000, 100);
     }
-    EEPROM.put(20, otherSettings);
-    EEPROM.commit();
+    eepromUpdate();
     touched = false;
     touchedButton = 0;
     lastReact = millis();
@@ -250,8 +248,7 @@ void reactTouch() { //take action according to touched key
     converted = true;
     if (!selectedSection) printNumber(MAIN, setTemp);
     otherSettings.tempUnit = !otherSettings.tempUnit;
-    EEPROM.put(20, otherSettings);
-    EEPROM.commit();
+    eepromUpdate();
     lastReact = millis();
     touched = false;
     touchedButton = 0;
@@ -278,8 +275,7 @@ void reactTouch() { //take action according to touched key
       changeSegment(24, 2, 0); //turn off Cal. icon
       changeSegment(24, 0, 0); //turn off ºC
       changeSegment(24, 1, 0); //turn off ºF
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
+      eepromUpdate();
     }
     if (otherSettings.buzzer) {
       tone(PIEZO, 1000, 100);
@@ -300,8 +296,7 @@ void handleButton() {
       }
       else {
         otherSettings.selectedCh = 1;
-        EEPROM.put(20, otherSettings);
-        EEPROM.commit();
+        eepromUpdate();
         printChannel(1);
         printNumber(MAIN, handleTempUnit(ch1Settings.temp, otherSettings.tempUnit));
         printNumber(LEFT, ch1Settings.blow);
@@ -317,8 +312,7 @@ void handleButton() {
     else if (millis() - btnMillis >= 1000) { //long press
       ch1Settings.temp = convertToC(setTemp);
       ch1Settings.blow = setBlow;
-      EEPROM.put(4, ch1Settings);
-      EEPROM.commit();
+      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -327,8 +321,7 @@ void handleButton() {
       buttonFlag = false;
       btn1 = 0;
       otherSettings.selectedCh = 1;
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
+      eepromUpdate();
       printChannel(otherSettings.selectedCh);
     }
   }
@@ -341,8 +334,7 @@ void handleButton() {
       }
       else {
         otherSettings.selectedCh = 2;
-        EEPROM.put(20, otherSettings);
-        EEPROM.commit();
+        eepromUpdate();
         printChannel(2);
         printNumber(MAIN, handleTempUnit(ch2Settings.temp, otherSettings.tempUnit));
         printNumber(LEFT, ch2Settings.blow);
@@ -358,8 +350,7 @@ void handleButton() {
     else if (millis() - btnMillis >= 1000) { //long press
       ch2Settings.temp = convertToC(setTemp);
       ch2Settings.blow = setBlow;
-      EEPROM.put(8, ch2Settings);
-      EEPROM.commit();
+      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -368,8 +359,7 @@ void handleButton() {
       buttonFlag = false;
       btn2 = 0;
       otherSettings.selectedCh = 2;
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
+      eepromUpdate();
       printChannel(otherSettings.selectedCh);
     }
   }
@@ -382,8 +372,7 @@ void handleButton() {
       }
       else {
         otherSettings.selectedCh = 3;
-        EEPROM.put(20, otherSettings);
-        EEPROM.commit();
+        eepromUpdate();
         printChannel(3);
         printNumber(MAIN, handleTempUnit(ch3Settings.temp, otherSettings.tempUnit));
         printNumber(LEFT, ch3Settings.blow);
@@ -399,8 +388,7 @@ void handleButton() {
     else if (millis() - btnMillis >= 1000) { //long press
       ch3Settings.temp = convertToC(setTemp);
       ch3Settings.blow = setBlow;
-      EEPROM.put(12, ch3Settings);
-      EEPROM.commit();
+      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -409,8 +397,7 @@ void handleButton() {
       buttonFlag = false;
       btn3 = 0;
       otherSettings.selectedCh = 3;
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
+      eepromUpdate();
       printChannel(otherSettings.selectedCh);
     }
   }
@@ -448,12 +435,12 @@ void defineTemp() {
       printChannel(0);
       eepromFlag = true;
     }
-    if (heating) { 
-      if(setTemp != tempMap){
-      if (setTemp > tempMap) setPointChanged = 1;
-      else setPointChanged = 2;
-      //Serial.println(setPointChanged);
-      setPointReached = false;
+    if (heating) {
+      if (setTemp != tempMap) {
+        if (setTemp > tempMap) setPointChanged = 1;
+        else setPointChanged = 2;
+        //Serial.println(setPointChanged);
+        setPointReached = false;
       }
     }
     if (tempMap < handleTempUnit(MINTEMP, otherSettings.tempUnit)) setTemp = handleTempUnit(MINTEMP, otherSettings.tempUnit);
