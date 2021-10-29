@@ -44,7 +44,7 @@ HT1621 ht(14, 13, 12, 11); // LCD data,wr,rd,cs
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 //Miscellaneous
-#define FIRMWARE_VERSION 101 //firmware version (1.01)
+#define FIRMWARE_VERSION 102 //firmware version (1.02)
 #define DEBOUNCETIME 10 //button debounce time
 #define LCDBRIGHTNESS 60 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
 #define LCDBRIGHTNESSDIM 100 //standby brightness
@@ -59,9 +59,12 @@ MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 #define TIMER_FREQ_HZ 1
 
 //Calibration factors (so the air that comes OUT OF THE NOZZLE actually reaches the set temperature)
-#define RANGE200 1.05
-#define RANGE300 1.08
-#define RANGE400 1.11
+#define RANGE100 0.92
+#define RANGE150 0.96
+#define RANGE200 1.01
+#define RANGE300 1.03
+#define RANGE400 1.055
+#define RANGE500 1.07
 
 // touch IC address / registers
 #define touchAddress 0x56 // Device address
@@ -131,7 +134,7 @@ struct otherSettings {
 chSettings ch1Settings, ch2Settings, ch3Settings, touchSettings;
 otherSettings otherSettings;
 
-unsigned int eepromCheck = 1234567899; //used in setup to check if settings where previously saved to flash (emulated eeprom)
+unsigned int eepromCheck = 1234567890; //used in setup to check if settings where previously saved to flash (emulated eeprom)
 
 //PID
 //P - how fast it shoots towards set point, if set too high creates overshoot, I - remove oscillations and offset, can increase overshoot D - like a break, removes overshoot, if set too high leads to unresponsiveness
@@ -148,6 +151,17 @@ RPI_PICO_Timer ITimer(3);
 RunningMedian samples = RunningMedian(8); //used for the temperature potentiometer analogRead
 RunningMedian samples2 = RunningMedian(8); //used for the blower potentiometer analogRead
 
+void eepromUpdate() { //(eeprom.put only writes to flash if what's already stored is different from the new values)
+  EEPROM.begin(64);
+  EEPROM.put(4, ch1Settings);
+  EEPROM.put(8, ch2Settings);
+  EEPROM.put(12, ch3Settings);
+  EEPROM.put(16, touchSettings);
+  EEPROM.put(20, otherSettings);
+  EEPROM.put(30, eepromCheck);
+  EEPROM.end();
+}
+
 void loadDefaults() {
   ch1Settings.temp = 200;
   ch1Settings.blow = 100;
@@ -163,21 +177,13 @@ void loadDefaults() {
   otherSettings.selectedCh = 1;
   otherSettings.calTemp = 7;
   otherSettings.serialOutput = 0;
-
-  EEPROM.put(4, ch1Settings);
-  EEPROM.put(8, ch2Settings);
-  EEPROM.put(12, ch3Settings);
-  EEPROM.put(16, touchSettings);
-  EEPROM.put(20, otherSettings);
-  EEPROM.put(30, eepromCheck);
-  EEPROM.commit();
+  eepromUpdate();
   Serial.println("Default settings loaded and saved to EEPROM");
   tone(PIEZO, 7000, 300);
 }
 
 void setup() {
   Serial.begin(115200);
-  EEPROM.begin(128);
   analogWriteFreq(20000); //20kHz PWM freq
   analogWriteRange(100); //because I'm using percentages, this makes it easier
 
@@ -186,7 +192,7 @@ void setup() {
   analogWrite(BACKLIGHT, 100); //backlight off until initializing LCD
   pinMode(PIEZO, OUTPUT);
   pinMode(BLOWER, OUTPUT);
-  analogWrite(BLOWER, 60); //turn on blower to get a more accurate reading of the temperature (in case there was a short power failure or you turned off the station while it was still hot the blower will turn on to avoid damage to the heater element/handle) 
+  analogWrite(BLOWER, 60); //turn on blower to get a more accurate reading of the temperature (in case there was a short power failure or you turned off the station while it was still hot the blower will turn on to avoid damage to the heater element/handle)
   pinMode(HEATER, OUTPUT);
   pinMode(AHEAT, INPUT);
   pinMode(ABLOW, INPUT);
@@ -206,6 +212,7 @@ void setup() {
   unsigned int tempEepromCheck;
 
   if (!defaultsLoaded) {
+    EEPROM.begin(64);
     EEPROM.get(30, tempEepromCheck);
     if (tempEepromCheck == eepromCheck) { //checks if the variable eepromCheck is already stored in flash, if it is,reads the settings else stores them.
       EEPROM.get(4, ch1Settings);
@@ -213,6 +220,7 @@ void setup() {
       EEPROM.get(12, ch3Settings);
       EEPROM.get(16, touchSettings);
       EEPROM.get(20, otherSettings);
+      EEPROM.end();
       Serial.println("Settings loaded from EEPROM");
     }
     else loadDefaults();
@@ -346,13 +354,14 @@ void loop() {
   if (displayingVersion && millis() >= 1000) {
     if (timer) printNumber(RIGHT, setTimer);
     else {
-      for ( byte i = 11; i < 16; i++) {
+      for ( byte i = 11; i < 16; i++) { //clear right display section
         ht.writeMem(i, 0);
       }
       changeSegment(16, 3, 1); //off icon
     }
     displayingVersion = false;
   }
+
   if (timerFlag) {
     printNumber(RIGHT, timerTemporary);
     timerFlag = false;
@@ -361,12 +370,12 @@ void loop() {
   if (toneFlag) {
     tone(PIEZO, 7000, 100);
     toneFlag = false;
-   }
+  }
 
   if (longToneFlag) {
     tone(PIEZO, 6000, 800);
     longToneFlag = false;
-      }
+  }
 
   if (readTouchFlag) { //read which button was touched
     touchedButton = readTouch();
@@ -375,8 +384,7 @@ void loop() {
 
   if (eepromFlag && millis() - potMillis > 100) { //this is used for defineBlower() and defineTemp() the reason I don't immediately write the channel setting to eeprom is because ocasionally it might happen that when turning the station off a change on the analog pins is detected and because there isn't enough time to write to eeprom before RP2040 completely loses power the flash ends up corrupted, having this delay solves the issue
     if (otherSettings.selectedCh == 0) { //check if the channel hasn't changed in the meantime
-      EEPROM.put(20, otherSettings);
-      EEPROM.commit();
+      eepromUpdate();
     }
     eepromFlag = false;
   }
