@@ -452,9 +452,7 @@ void stopBlinking() {
   if (otherSettings.selectedCh == 4) {
     touchSettings.temp = convertToC(setTemp);
     touchSettings.blow = setBlow;
-    EEPROM.put(16, touchSettings);
-    EEPROM.put(20, otherSettings);
-    EEPROM.commit();
+    eepromUpdate();
   }
 }
 
