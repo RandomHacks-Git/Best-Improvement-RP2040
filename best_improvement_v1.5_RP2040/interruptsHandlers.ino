@@ -17,35 +17,35 @@ void touchAction() {
 
 void reedAction() {
   //if (millis() - reedMillis >= DEBOUNCETIME) {
-    reedStatus = digitalRead(REEDINT);
-    reedFlag = true;
- // }
-  reedMillis = millis();
+  //reedStatus = digitalRead(REEDINT);
+  reedFlag = true;
+  //}
+  //reedMillis = millis();
 }
 
 void btnAction() {
   //if (millis() - btnMillis >= DEBOUNCETIME) {
-    if (!buttonFlag) {
-      btn1 = !digitalRead(BTN1);
-      btn2 = !digitalRead(BTN2);
-      btn3 = !digitalRead(BTN3);
-      if (btn1 || btn2 || btn3) {
-        buttonFlag = true;
-        if (otherSettings.buzzer)toneFlag = true;
-      }
+  if (!buttonFlag) {
+    btn1 = !digitalRead(BTN1);
+    btn2 = !digitalRead(BTN2);
+    btn3 = !digitalRead(BTN3);
+    if (btn1 || btn2 || btn3) {
+      buttonFlag = true;
+      if (otherSettings.buzzer)toneFlag = true;
     }
+  }
   //}
   btnMillis = millis();
 }
 
 bool timerHandler(struct repeating_timer *t) {
-    if (timer) {
+  if (timer) {
     if (timerTemporary < setTimer || millis() - setPointReachedTime >= 900) {
       if (timerTemporary - 1 > 0) {
         timerTemporary--;
       }
       else {
-        timerTemporary = 0; 
+        timerTemporary = 0;
         if (otherSettings.buzzer)longToneFlag = true;
         ITimer.detachInterrupt();
         myPID.SetMode(MANUAL); //turn off PID

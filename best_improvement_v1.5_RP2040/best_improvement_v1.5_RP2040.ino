@@ -1,4 +1,4 @@
-//uses core https://github.com/earlephilhower/arduino-pico 1.9.5, Generic RP2040 - all other settings untouched default
+//uses core https://github.com/earlephilhower/arduino-pico Generic RP2040 - USB Stack: Adafruit TinyUSB
 
 #include <Wire.h> //for touch ic
 #include <EEPROM.h>
@@ -44,7 +44,7 @@ HT1621 ht(14, 13, 12, 11); // LCD data,wr,rd,cs
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 //Miscellaneous
-#define FIRMWARE_VERSION 102 //firmware version (1.02)
+#define FIRMWARE_VERSION 103 //firmware version (1.03)
 #define DEBOUNCETIME 10 //button debounce time
 #define LCDBRIGHTNESS 60 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
 #define LCDBRIGHTNESSDIM 100 //standby brightness
@@ -198,7 +198,7 @@ void setup() {
   pinMode(ABLOW, INPUT);
   pinMode(BTN1, INPUT_PULLUP);
   pinMode(BTN2, INPUT_PULLUP);
-  pinMode(BTN3, INPUT_PULLUP);
+  pinMode(BTN3, INPUT_PULLUP); 
   pinMode(REEDINT, INPUT_PULLUP);
   pinMode(TOUCHINT, INPUT);
 
@@ -390,6 +390,8 @@ void loop() {
   }
 
   if (reedFlag) {
+    delay(DEBOUNCETIME);
+    reedStatus = digitalRead(REEDINT)                                                                                                                                                ;
     if (reedStatus) { //out of base
       timerTemporary = setTimer;
       changeSegment(31, 2, 1); //turn on iron icon
