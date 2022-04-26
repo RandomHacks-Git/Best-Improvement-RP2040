@@ -24,18 +24,18 @@ void reedAction() {
 }
 
 void btnAction() {
-  //if (millis() - btnMillis >= DEBOUNCETIME) {
-  if (!buttonFlag) {
-    btn1 = !digitalRead(BTN1);
-    btn2 = !digitalRead(BTN2);
-    btn3 = !digitalRead(BTN3);
-    if (btn1 || btn2 || btn3) {
-      buttonFlag = true;
-      if (otherSettings.buzzer)toneFlag = true;
+  if (millis() - btnMillis >= DEBOUNCETIME) {
+    if (!buttonFlag) {
+      btn1 = !digitalRead(BTN1);
+      btn2 = !digitalRead(BTN2);
+      btn3 = !digitalRead(BTN3);
+      if (btn1 || btn2 || btn3) {
+        buttonFlag = true;
+        if (otherSettings.buzzer)toneFlag = true;
+      }
     }
+    btnMillis = millis();
   }
-  //}
-  btnMillis = millis();
 }
 
 bool timerHandler(struct repeating_timer *t) {
@@ -55,6 +55,7 @@ bool timerHandler(struct repeating_timer *t) {
         coolingAfterTimer = true;
         setPointReached = false;
         setPointChanged = 2;
+        if (otherSettings.cool) coolAirFlag = true;
       }
     }
   }

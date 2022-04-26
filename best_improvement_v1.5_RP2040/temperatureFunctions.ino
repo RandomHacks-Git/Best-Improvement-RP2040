@@ -45,7 +45,7 @@ float readTemp(bool unit) {
 }
 
 short handleTempUnit (unsigned short temp, bool unit) {
-  if (unit)return temp;
+  if (unit || temp == 0)return temp;
   else {
     short converted = (temp * 1.8 + 32); //convert from ºC to ºF
     if (converted > 999) return 999; //display only has 3 digits :(
@@ -54,13 +54,13 @@ short handleTempUnit (unsigned short temp, bool unit) {
 }
 
 short convertToC(unsigned short temp) {
-  if (otherSettings.tempUnit)return temp; //already in ºC
+  if (otherSettings.tempUnit || temp == 0)return temp; //already in ºC or 0ºC
   else return int(((temp - 32) / 1.8)); //convert from ºF to ºC
 }
 
 void heat() {
   calibrateTemp(1);
-  if (setPoint >= 400) myPID.SetTunings(HIGH_KP, HIGH_KI, HIGH_KD); 
+  if (setPoint >= 400) myPID.SetTunings(HIGH_KP, HIGH_KI, HIGH_KD);
   else myPID.SetTunings(KP, KI, KD);
   input = readTemp(1);
   myPID.Compute();
@@ -82,11 +82,15 @@ int calibrateTemp(bool type) {
     return handleTempUnit(setPoint, otherSettings.tempUnit);
   }
   else { //calibrate temperature reading to display on LCD
-    if (convertToC(setTemp) < 150) {
+    if (otherSettings.cool) {
+      if (otherSettings.tempUnit) return int((readTemp(1) - otherSettings.calTemp)); //ºC
+      else return handleTempUnit(((readTemp(1) - otherSettings.calTemp)), 0); //ºF
+    }
+    else if (convertToC(setTemp) < 150) {
       if (otherSettings.tempUnit) return int((readTemp(1) - otherSettings.calTemp) / RANGE100); //ºC
       else return handleTempUnit(((readTemp(1) - otherSettings.calTemp) / RANGE100), 0); //ºF
     }
-    if (convertToC(setTemp) < 200) {
+    else if (convertToC(setTemp) < 200) {
       if (otherSettings.tempUnit) return int((readTemp(1) - otherSettings.calTemp) / RANGE150); //ºC
       else return handleTempUnit(((readTemp(1) - otherSettings.calTemp) / RANGE150), 0); //ºF
     }
@@ -108,4 +112,24 @@ int calibrateTemp(bool type) {
     }
   }
   return 0;
+}
+
+void startHeating() {
+  myPID.SetMode(AUTOMATIC); //turn on PID
+  windowStartTime = millis();
+  ht.writeMem(23, 0b1000); //thermometer icon on
+  heating = true;
+}
+
+void stopHeating() {
+  myPID.SetMode(MANUAL); //turn off PID
+  output = 0;
+  digitalWrite(HEATER, LOW);
+  heating = false;
+  setPointReached = false;
+  setPointChanged = 2;
+  coolingAfterTimer = false;
+  if (otherSettings.cool && selectedSection == 4) {
+    stopBlinking();
+  }
 }

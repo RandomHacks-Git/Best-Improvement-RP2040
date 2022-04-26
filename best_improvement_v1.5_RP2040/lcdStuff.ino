@@ -355,14 +355,16 @@ void blinkSelection() {
         sectionOff = true;
       }
       else { //turn on section
-        printNumber(MAIN, setTemp);
+        if (!otherSettings.cool) printNumber(MAIN, setTemp);
+        else printOff(0);
         sectionOff = false;
       }
       lastBlink = millis();
       break;
 
     case 2:
-      printNumber(MAIN, setTemp);
+      if (!otherSettings.cool) printNumber(MAIN, setTemp);
+      else printOff(0);
       if (!sectionOff) {
         for (byte i = 25; i < 31; i++) {
           ht.writeMem(i, 0b0000);
@@ -433,9 +435,10 @@ void blinkSelection() {
 
 
 void stopBlinking() {
-  printNumber(MAIN, setTemp);
+  if (!otherSettings.cool) printNumber(MAIN, setTemp);
+  else printOff(0);
   printNumber(LEFT, setBlow);
-  if (!heating) {
+  if (!reedStatus || coolingAfterTimer || coolAirFlag) {
     if (timer) {
       printNumber(RIGHT, setTimer);
       if (timeUnit) changeSegment(10, 3, 1); //enable S icon
@@ -448,11 +451,16 @@ void stopBlinking() {
       changeSegment(10, 3, 0); //disable S icon
     }
   }
+  if (selectedSection == 4) {
+    changeSegment(24, 0, 0); //turn off ºC
+    changeSegment(24, 1, 0); //turn off ºF
+    eepromFlag = true;
+  }
   selectedSection = 0;
   if (otherSettings.selectedCh == 4) {
     touchSettings.temp = convertToC(setTemp);
     touchSettings.blow = setBlow;
-    eepromUpdate();
+    eepromFlag = true;;
   }
 }
 
@@ -460,4 +468,52 @@ void changeSegment(byte address, byte bit, bool value) { //changes a single segm
   byte nowSet = ht.readMem(address); //check what is currently being displayed on address so we only change what we want
   nowSet = bitWrite(nowSet, bit, value); //change only the segment we want (bit)
   ht.writeMem(address, nowSet);
+}
+
+void printUnit() {
+  if (otherSettings.tempUnit)changeSegment(10, 0, 1); //ºC
+  else changeSegment(10, 1, 1); //ºF
+}
+
+void printOff(bool lcdArea) { //prints OFF on main display if lcdArea is 0 or on left display if lcdArea is 1 and disables temp unit icon, used for cool air only function
+  if (!lcdArea) { //main
+    digitPrint(21, 0);
+    printLetter(19, 'f');
+    printLetter(17, 'f');
+    //  changeSegment(10, 0, 0); //disable ºC
+    //  changeSegment(10, 1, 0); //disable ºF
+  }
+  else { //small left
+    digitPrint(29, 0);
+    printLetter(27, 'f');
+    printLetter(25, 'f');
+    //  changeSegment(24, 0, 0); //disable ºC
+    //  changeSegment(24, 1, 0); //disable ºF
+  }
+}
+
+void toggleLeftDisplay() { //toggle between set temp and fan speed on the left display
+  if (switchDisplayed) {
+    changeSegment(24, 0, 0); //turn off ºC
+    changeSegment(24, 1, 0); //turn off ºF
+    changeSegment(31, 0, 1); //turn on Set
+    changeSegment(31, 1, 1); //turn on fan icon
+    printNumber(LEFT, setBlow); //print set blower
+  }
+  else {
+    changeSegment(31, 0, 1); //turn on Set
+    changeSegment(31, 1, 0); //turn off fan icon
+
+    if (otherSettings.tempUnit) { //turn on ºC
+      changeSegment(24, 1, 0); //turn off ºF
+      changeSegment(24, 0, 1); //turn on ºC
+    }
+    else { //turn on ºF
+      changeSegment(24, 0, 0); //turn off ºC
+      changeSegment(24, 1, 1); //turn on ºF
+    }
+    if (!otherSettings.cool) printNumber(LEFT, setTemp); //print temperature
+    else printOff(1);
+  }
+  switchDisplayed = !switchDisplayed;
 }

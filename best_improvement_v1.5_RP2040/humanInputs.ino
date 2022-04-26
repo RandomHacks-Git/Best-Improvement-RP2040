@@ -12,15 +12,36 @@ void reactTouch() { //take action according to touched key
   byte stepAmount = 5;
   if ((touchedButton == UP || touchedButton == DOWN) && millis() - touchMillis > 1000) {
     if (!selectedSection) {
-      otherSettings.serialOutput = !otherSettings.serialOutput;
-      changeSegment(7, 1, otherSettings.serialOutput); //turn "RS232 On" segment on LCD on or off depending on serialOutput bool status
-      eepromUpdate();
-      if (otherSettings.buzzer) {
-        tone(PIEZO, 4000, 70);
-        delay(70);
-        tone(PIEZO, 5000, 100);
-        lastReact = millis();
+      if (touchedButton == UP) {
+        otherSettings.serialOutput = !otherSettings.serialOutput;
+        changeSegment(7, 1, otherSettings.serialOutput); //turn "RS232 On" segment on LCD on or off depending on serialOutput bool status
+        eepromFlag = true;;
       }
+      else if (setTemp) { //long press down button, toggle cool air only mode if cool air mode not saved as preset in current channel
+        otherSettings.cool = !otherSettings.cool;
+        eepromFlag = true;;
+        if (otherSettings.cool) { // enter cool air only
+          stopHeating();
+          printOff(0);
+        }
+        else {
+          loadChannelSettings(); // exit cool air only mode
+          if (reedStatus && blowerOn) startHeating(); //if the handle is out of the cradle, start heating
+        }
+      }
+      if (otherSettings.buzzer) {
+        if (touchedButton == UP || setTemp) {
+          tone(PIEZO, 4000, 70);
+          delay(70);
+          tone(PIEZO, 5000, 100);
+        }
+        else { //while toggling cool air only mode, if setTemp = 0, make "not allowed" noise (channel preset saved as cool air only so no temperature saved to change to
+          tone(PIEZO, 4000, 100);
+          delay(100);
+          tone(PIEZO, 3000, 150);
+        }
+      }
+      lastReact = millis();
       touched = false;
     }
     else { //increase stepAmount if any setting is selected and up or down buttons are long pressed
@@ -42,7 +63,7 @@ void reactTouch() { //take action according to touched key
       delay(70);
       tone(PIEZO, 4000, 100);
     }
-    eepromUpdate();
+    eepromFlag = true;;
     touched = false;
     touchedButton = 0;
     lastReact = millis();
@@ -50,13 +71,13 @@ void reactTouch() { //take action according to touched key
   }
 
   if (touchedButton == SET && touchReleased && selectedSection != 4 && millis() - lastReact >= 200) {
-    if (selectedSection < 2 || (selectedSection < 3 && !reedStatus)) { // || (timer && selectedSection < 3 && !heating) initially I planned to manage seconds and minutes so there was another section to toggle between them // timer can only be changed if the handle is in the base
+    if (selectedSection < 2 || (!reedStatus && selectedSection < 3)) { // || (timer && selectedSection < 3 && !heating) initially I planned to manage seconds and minutes so there was another section to toggle between them // timer can only be changed if the handle is in the base
       selectedSection += 1;
       printNumber(LEFT, setBlow); //if in settings menu print the blower value imediately or else if currently heating "set temperature" might appear instead
       ht.writeMem(31, 0b0010); //enable fan icon disable set icon
       changeSegment(24, 0, 0); //disable ºC
       changeSegment(24, 1, 0); //disable ºF
-      if (!heating) {
+      if (!reedStatus || coolingAfterTimer || coolAirFlag) {
         printNumber(RIGHT, setTimer); //timer value
         changeSegment(10, 3, 1); //enable S icon
       }
@@ -72,6 +93,15 @@ void reactTouch() { //take action according to touched key
 
   else if (touchedButton == UP) { //UP BUTTON
     if (selectedSection == 1) { //temp
+      if (otherSettings.cool) {
+        otherSettings.cool = false;
+        setTemp = handleTempUnit(MINTEMP, otherSettings.tempUnit);
+        printUnit();
+        if (reedStatus && blowerOn && !coolingAfterTimer) { //if handle outside cradle and the blower is on (not cooling after timer), turn heat on
+          heating = true;
+          startHeating();
+        }
+      }
       if (setTemp + stepAmount < handleTempUnit(MAXTEMP, otherSettings.tempUnit)) {
         setTemp += stepAmount;
         if (otherSettings.selectedCh != 4 || converted || (!otherSettings.tempUnit && setTemp == 217)) { //if it is the first time I modify the temperature with the touch channel (otherSettings.selectedCh isn't 4 yet) or the temp unit changed or it is set to ºF and at the min temp (212ºF) I round up the value to the nearest multiple of 5
@@ -246,14 +276,14 @@ void reactTouch() { //take action according to touched key
       setTemp = handleTempUnit(setTemp, 0); //convert to ºF
     }
     converted = true;
-    if (!selectedSection) printNumber(MAIN, setTemp);
+    if (!otherSettings.cool && !selectedSection) printNumber(MAIN, setTemp);
     otherSettings.tempUnit = !otherSettings.tempUnit;
-    eepromUpdate();
+    eepromFlag = true;;
     lastReact = millis();
     touched = false;
     touchedButton = 0;
   }
-  if (touchedButton == CF && !setTimer && (!selectedSection || selectedSection == 4) && millis() - touchMillis > 1000) {
+  if (!otherSettings.cool && touchedButton == CF && !setTimer && (!selectedSection || selectedSection == 4) && millis() - touchMillis > 1000) {
     if (!selectedSection) {
       selectedSection = 4;
       changeSegment(31, 0, 1); //turn on Set icon
@@ -275,7 +305,7 @@ void reactTouch() { //take action according to touched key
       changeSegment(24, 2, 0); //turn off Cal. icon
       changeSegment(24, 0, 0); //turn off ºC
       changeSegment(24, 1, 0); //turn off ºF
-      eepromUpdate();
+      eepromFlag = true;;
     }
     if (otherSettings.buzzer) {
       tone(PIEZO, 1000, 100);
@@ -290,29 +320,42 @@ void handleButton() {
   if (btn1) {
     if (digitalRead(BTN1)) { //short press
       if (selectedSection && selectedSection != 4) stopBlinking();
-      if (otherSettings.selectedCh == 1) {
+      if (otherSettings.selectedCh == 1 && (!otherSettings.cool || ch1Settings.temp == 0)) {
         defineBlower();
         defineTemp();
       }
       else {
         otherSettings.selectedCh = 1;
-        eepromUpdate();
         printChannel(1);
-        printNumber(MAIN, handleTempUnit(ch1Settings.temp, otherSettings.tempUnit));
+        if (ch1Settings.temp > 0) {
+          printNumber(MAIN, handleTempUnit(ch1Settings.temp, otherSettings.tempUnit));
+          otherSettings.cool = false;
+        }
+        else {
+          printOff(0);
+          otherSettings.cool = true;
+          stopHeating();
+          }
+        printUnit();
+        if (reedStatus && blowerOn && !coolingAfterTimer && !otherSettings.cool) { //if handle outside cradle and the blower is on (not cooling after timer) and not in cool air only mode, turn heat on
+          heating = true;
+          startHeating();
+        }
         printNumber(LEFT, ch1Settings.blow);
-        if (convertToC(setTemp) > ch1Settings.temp && heating) setPointChanged = 1;
+        if (!otherSettings.cool && convertToC(setTemp) > ch1Settings.temp && heating) setPointChanged = 1;
         else setPointChanged = 2;
         setTemp = handleTempUnit(ch1Settings.temp, otherSettings.tempUnit);
         setBlow = ch1Settings.blow;
+        eepromFlag = true;
       }
       setPointReached = false;
       buttonFlag = false;
       btn1 = 0;
     }
     else if (millis() - btnMillis >= 1000) { //long press
-      ch1Settings.temp = convertToC(setTemp);
+      if (!otherSettings.cool) ch1Settings.temp = convertToC(setTemp);
+      else ch1Settings.temp = 0;
       ch1Settings.blow = setBlow;
-      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -321,36 +364,49 @@ void handleButton() {
       buttonFlag = false;
       btn1 = 0;
       otherSettings.selectedCh = 1;
-      eepromUpdate();
       printChannel(otherSettings.selectedCh);
+      eepromFlag = true; //eepromUpdate();
     }
   }
   else if (btn2) {
     if (digitalRead(BTN2)) { //short press
       if (selectedSection && selectedSection != 4) stopBlinking();
-      if (otherSettings.selectedCh == 2) {
+      if (otherSettings.selectedCh == 2 && (!otherSettings.cool || ch2Settings.temp == 0)) {
         defineBlower();
         defineTemp();
       }
       else {
         otherSettings.selectedCh = 2;
-        eepromUpdate();
         printChannel(2);
-        printNumber(MAIN, handleTempUnit(ch2Settings.temp, otherSettings.tempUnit));
+        if (ch2Settings.temp > 0) {
+          printNumber(MAIN, handleTempUnit(ch2Settings.temp, otherSettings.tempUnit));
+          otherSettings.cool = false;
+        }
+        else {
+          printOff(0);
+          otherSettings.cool = true;
+          stopHeating();
+        }
+        printUnit();
+        if (reedStatus && blowerOn && !coolingAfterTimer && !otherSettings.cool) { //if handle outside cradle and the blower is on (not cooling after timer) and not in cool air only mode, turn heat on
+          heating = true;
+          startHeating();
+        }
         printNumber(LEFT, ch2Settings.blow);
-        if (convertToC(setTemp) > ch2Settings.temp && heating) setPointChanged = 1;
+        if (!otherSettings.cool && convertToC(setTemp) > ch2Settings.temp && heating) setPointChanged = 1;
         else setPointChanged = 2;
         setTemp = handleTempUnit(ch2Settings.temp, otherSettings.tempUnit);
         setBlow = ch2Settings.blow;
+        eepromFlag = true;;
       }
       setPointReached = false;
       buttonFlag = false;
       btn2 = 0;
     }
     else if (millis() - btnMillis >= 1000) { //long press
-      ch2Settings.temp = convertToC(setTemp);
+      if (!otherSettings.cool) ch2Settings.temp = convertToC(setTemp);
+      else ch2Settings.temp = 0;
       ch2Settings.blow = setBlow;
-      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -359,36 +415,49 @@ void handleButton() {
       buttonFlag = false;
       btn2 = 0;
       otherSettings.selectedCh = 2;
-      eepromUpdate();
       printChannel(otherSettings.selectedCh);
+      eepromFlag = true; //eepromUpdate();
     }
   }
   else if (btn3) {
     if (digitalRead(BTN3)) { //short press
       if (selectedSection && selectedSection != 4) stopBlinking();
-      if (otherSettings.selectedCh == 3) {
+       if (otherSettings.selectedCh == 3 && (!otherSettings.cool || ch3Settings.temp == 0)) {
         defineBlower();
         defineTemp();
       }
       else {
         otherSettings.selectedCh = 3;
-        eepromUpdate();
         printChannel(3);
-        printNumber(MAIN, handleTempUnit(ch3Settings.temp, otherSettings.tempUnit));
+        if (ch3Settings.temp > 0) {
+          printNumber(MAIN, handleTempUnit(ch3Settings.temp, otherSettings.tempUnit));
+          otherSettings.cool = false;
+        }
+        else {
+          printOff(0);
+          otherSettings.cool = true;
+          stopHeating();
+        }
+        printUnit();
+        if (reedStatus && blowerOn && !coolingAfterTimer && !otherSettings.cool) { //if handle outside cradle and the blower is on (not cooling after timer) and not in cool air only mode, turn heat on
+          heating = true;
+          startHeating();
+        }
         printNumber(LEFT, ch3Settings.blow);
-        if (convertToC(setTemp) > ch3Settings.temp && heating) setPointChanged = 1;
+        if (!otherSettings.cool && convertToC(setTemp) > ch3Settings.temp && heating) setPointChanged = 1;
         else setPointChanged = 2;
         setTemp = handleTempUnit(ch3Settings.temp, otherSettings.tempUnit);
         setBlow = ch3Settings.blow;
+        eepromFlag = true;;
       }
       setPointReached = false;
       buttonFlag = false;
       btn3 = 0;
     }
     else if (millis() - btnMillis >= 1000) { //long press
-      ch3Settings.temp = convertToC(setTemp);
+      if (!otherSettings.cool) ch3Settings.temp = convertToC(setTemp);
+      else ch3Settings.temp = 0;
       ch3Settings.blow = setBlow;
-      eepromUpdate();
       if (otherSettings.buzzer) {
         tone(PIEZO, 4000, 50);
         delay(50);
@@ -397,8 +466,8 @@ void handleButton() {
       buttonFlag = false;
       btn3 = 0;
       otherSettings.selectedCh = 3;
-      eepromUpdate();
       printChannel(otherSettings.selectedCh);
+      eepromFlag = true; //eepromUpdate();
     }
   }
 }
@@ -418,6 +487,9 @@ void defineBlower() {
     if (tempMap < MINBLOW) setBlow = MINBLOW;
     else if (tempMap > MAXBLOW) setBlow = MAXBLOW;
     else setBlow = tempMap;
+    changeSegment(24, 0, 0); //turn off left ºC
+    changeSegment(24, 1, 0); //turn off left ºF
+    changeSegment(31, 1, 1); //turn on fan icon
     printNumber(LEFT, setBlow);
     potMillis = millis();
   }
@@ -447,6 +519,15 @@ void defineTemp() {
     else if (tempMap > handleTempUnit(MAXTEMP, otherSettings.tempUnit)) setTemp = handleTempUnit(MAXTEMP, otherSettings.tempUnit);
     else setTemp = tempMap;
     printNumber(MAIN, setTemp);
+    if (otherSettings.cool) {
+      otherSettings.cool = false;
+      eepromFlag = true;
+      printUnit();
+      if (reedStatus && blowerOn && !coolingAfterTimer) { //if handle outside cradle and the blower is on (not cooling after timer), turn heat on
+        heating = true;
+        startHeating();
+      }
+    }
     potMillis = millis();
   }
 }

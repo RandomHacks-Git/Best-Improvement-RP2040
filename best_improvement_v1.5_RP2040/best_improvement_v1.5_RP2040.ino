@@ -1,4 +1,5 @@
-//uses core https://github.com/earlephilhower/arduino-pico Generic RP2040 - USB Stack: Adafruit TinyUSB
+//uses core https://github.com/earlephilhower/arduino-pico 
+//Generic RP2040 - USB Stack: Adafruit TinyUSB, other settings leave as default (except for the serial port of course)
 
 #include <Wire.h> //for touch ic
 #include <EEPROM.h>
@@ -44,15 +45,16 @@ HT1621 ht(14, 13, 12, 11); // LCD data,wr,rd,cs
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 //Miscellaneous
-#define FIRMWARE_VERSION 103 //firmware version (1.03)
-#define DEBOUNCETIME 10 //button debounce time
+#define FIRMWARE_VERSION 104 //firmware version (1.04)
+#define DEBOUNCETIME 15 //button debounce time
 #define LCDBRIGHTNESS 60 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
 #define LCDBRIGHTNESSDIM 100 //standby brightness
-#define MINTEMP 100
-#define MAXTEMP 550
-#define MINBLOW 35
-#define MAXBLOW 100
-#define SHUTDOWNTEMP 85 //below this temp the blower shuts off
+#define MINTEMP 100 //ºC
+#define MAXTEMP 550 //ºC
+#define MINBLOW 1 //displayed value (%)
+#define MINDUTYCYCLE 30 //actual minimum PWM duty cycle (in %), I don't recommend to lower this value as it probably would lower the life of the heating element
+#define MAXBLOW 100 //displayed and real value (%)
+#define SHUTDOWNTEMP 85 //below this temp the blower shuts off (ºC)
 #define SETTINGSEXITTIME 8000 //if you are inside settings (blinking screen), it will automatically exit after this time (ms)
 #define WINDOWSIZE 205 //Heater PWM period size (ms)
 #define SERIALTIME 1000 //Serial output time (ms)
@@ -87,6 +89,7 @@ volatile unsigned long btnMillis, reedMillis;
 volatile bool buttonFlag;
 volatile bool toneFlag, longToneFlag;
 volatile bool reedFlag;
+
 volatile byte touchedButton;
 volatile bool readTouchFlag;
 unsigned long lastReact;
@@ -99,12 +102,14 @@ volatile byte setPointChanged = 2; //0 = no change, 1 = decreased, 2 = increased
 bool converted;
 bool newPotValue;
 unsigned long potMillis;
+long lastEepromUpdate;
 unsigned long windowStartTime;
 unsigned long setPointReachedTime;
 unsigned long lastAnalogCheck;
 volatile bool heating;
 bool blowerOn;
 volatile bool coolingAfterTimer;
+bool coolAirFlag;
 volatile unsigned short timerTemporary;
 
 unsigned short heaterVal, blowerVal; //analog pot values for heater and blower
@@ -129,6 +134,7 @@ struct otherSettings {
   byte selectedCh;
   short calTemp; //temperature calibration value, can be negative or positive
   bool serialOutput;
+  bool cool; //1 for cool air only
 };
 
 chSettings ch1Settings, ch2Settings, ch3Settings, touchSettings;
@@ -152,7 +158,7 @@ RunningMedian samples = RunningMedian(8); //used for the temperature potentiomet
 RunningMedian samples2 = RunningMedian(8); //used for the blower potentiometer analogRead
 
 void eepromUpdate() { //(eeprom.put only writes to flash if what's already stored is different from the new values)
-  EEPROM.begin(64);
+  EEPROM.begin(256);
   EEPROM.put(4, ch1Settings);
   EEPROM.put(8, ch2Settings);
   EEPROM.put(12, ch3Settings);
@@ -160,6 +166,7 @@ void eepromUpdate() { //(eeprom.put only writes to flash if what's already store
   EEPROM.put(20, otherSettings);
   EEPROM.put(30, eepromCheck);
   EEPROM.end();
+  lastEepromUpdate = millis();
 }
 
 void loadDefaults() {
@@ -177,9 +184,68 @@ void loadDefaults() {
   otherSettings.selectedCh = 1;
   otherSettings.calTemp = 7;
   otherSettings.serialOutput = 0;
+  otherSettings.cool = 0;
   eepromUpdate();
   Serial.println("Default settings loaded and saved to EEPROM");
   tone(PIEZO, 7000, 300);
+}
+
+void loadChannelSettings() {
+  switch (otherSettings.selectedCh) {
+    case 0: //pot
+      defineBlower();
+      defineTemp();
+      break;
+    case 1: //ch1
+      setTemp = handleTempUnit(ch1Settings.temp, otherSettings.tempUnit);
+      setBlow = ch1Settings.blow;
+      if (ch1Settings.temp > 0) {
+        printNumber(MAIN, setTemp);
+        otherSettings.cool = false;
+      }
+      else {
+        printOff(0);
+        stopHeating();
+      }
+      printNumber(LEFT, setBlow);
+      break;
+    case 2: //ch2
+      setTemp = handleTempUnit(ch2Settings.temp, otherSettings.tempUnit);
+      setBlow = ch2Settings.blow;
+      if (ch2Settings.temp > 0) {
+        printNumber(MAIN, setTemp);
+        otherSettings.cool = false;
+      }
+      else {
+        printOff(0);
+        stopHeating();
+      }
+      printNumber(LEFT, setBlow);
+      break;
+    case 3: //ch3
+      setTemp = handleTempUnit(ch3Settings.temp, otherSettings.tempUnit);
+      setBlow = ch3Settings.blow;
+      if (ch3Settings.temp > 0) {
+        printNumber(MAIN, setTemp);
+        otherSettings.cool = false;
+      }
+      else {
+        printOff(0);
+        stopHeating();
+      }
+      printNumber(LEFT, setBlow);
+      break;
+    case 4: //touch
+      setTemp = handleTempUnit(touchSettings.temp, otherSettings.tempUnit);
+      setBlow = touchSettings.blow;
+      if (!otherSettings.cool) printNumber(MAIN, setTemp);
+      else {
+        printOff(0);
+        stopHeating();
+      }
+      printNumber(LEFT, setBlow);
+  }
+  printUnit();
 }
 
 void setup() {
@@ -198,7 +264,7 @@ void setup() {
   pinMode(ABLOW, INPUT);
   pinMode(BTN1, INPUT_PULLUP);
   pinMode(BTN2, INPUT_PULLUP);
-  pinMode(BTN3, INPUT_PULLUP); 
+  pinMode(BTN3, INPUT_PULLUP);
   pinMode(REEDINT, INPUT_PULLUP);
   pinMode(TOUCHINT, INPUT);
 
@@ -212,7 +278,7 @@ void setup() {
   unsigned int tempEepromCheck;
 
   if (!defaultsLoaded) {
-    EEPROM.begin(64);
+    EEPROM.begin(256);
     EEPROM.get(30, tempEepromCheck);
     if (tempEepromCheck == eepromCheck) { //checks if the variable eepromCheck is already stored in flash, if it is,reads the settings else stores them.
       EEPROM.get(4, ch1Settings);
@@ -240,35 +306,7 @@ void setup() {
   blowerVal = analogRead(ABLOW);
   heaterVal = analogRead(AHEAT);
 
-  switch (otherSettings.selectedCh) {
-    case 0: //pot
-      defineBlower();
-      defineTemp();
-      break;
-    case 1: //ch1
-      setTemp = handleTempUnit(ch1Settings.temp, otherSettings.tempUnit);
-      setBlow = ch1Settings.blow;
-      printNumber(MAIN, setTemp);
-      printNumber(LEFT, setBlow);
-      break;
-    case 2: //ch2
-      setTemp = handleTempUnit(ch2Settings.temp, otherSettings.tempUnit);
-      setBlow = ch2Settings.blow;
-      printNumber(MAIN, setTemp);
-      printNumber(LEFT, setBlow);
-      break;
-    case 3: //ch3
-      setTemp = handleTempUnit(ch3Settings.temp, otherSettings.tempUnit);
-      setBlow = ch3Settings.blow;
-      printNumber(MAIN, setTemp);
-      printNumber(LEFT, setBlow);
-      break;
-    case 4: //touch
-      setTemp = handleTempUnit(touchSettings.temp, otherSettings.tempUnit);
-      setBlow = touchSettings.blow;
-      printNumber(MAIN, setTemp);
-      printNumber(LEFT, setBlow);
-  }
+  loadChannelSettings();
 
   //turn on touch keys segments
   ht.writeMem(6, 0b1111);
@@ -281,10 +319,6 @@ void setup() {
 
   //turn on "off" icon
   changeSegment(16, 3, 1);
-
-  //turn on ºC or ºF on main display
-  if (otherSettings.tempUnit)ht.writeMem(10, 0b0001); //ºC
-  else ht.writeMem(10, 0b0010); //ºF
 
   printChannel(otherSettings.selectedCh); //Print channel to screen
 
@@ -382,10 +416,8 @@ void loop() {
     readTouchFlag = false;
   }
 
-  if (eepromFlag && millis() - potMillis > 100) { //this is used for defineBlower() and defineTemp() the reason I don't immediately write the channel setting to eeprom is because ocasionally it might happen that when turning the station off a change on the analog pins is detected and because there isn't enough time to write to eeprom before RP2040 completely loses power the flash ends up corrupted, having this delay solves the issue
-    if (otherSettings.selectedCh == 0) { //check if the channel hasn't changed in the meantime
-      eepromUpdate();
-    }
+  if (eepromFlag && millis() - lastEepromUpdate > 300 && millis() - potMillis > 100) { //this is used for defineBlower() and defineTemp() the reason I don't immediately write the channel setting to eeprom is because ocasionally it might happen that when turning the station off a change on the analog pins is detected and because there isn't enough time to write to eeprom before RP2040 completely loses power the flash ends up corrupted, having this delay solves the issue
+    eepromUpdate();
     eepromFlag = false;
   }
 
@@ -393,32 +425,44 @@ void loop() {
     delay(DEBOUNCETIME);
     reedStatus = digitalRead(REEDINT)                                                                                                                                                ;
     if (reedStatus) { //out of base
+      printUnit();
       timerTemporary = setTimer;
       changeSegment(31, 2, 1); //turn on iron icon
-      analogWrite(BLOWER, setBlow); //turn blower on at current setting, map percentage to duty cycle
-      myPID.SetMode(AUTOMATIC); //turn on PID
-      windowStartTime = millis();
-      heating = true;
+      analogWrite(BLOWER, map(setBlow, MINBLOW, MAXBLOW, MINDUTYCYCLE, MAXBLOW)); //turn blower on at current setting, map percentage to duty cycle
       blowerOn = true;
-      ht.writeMem(23, 0b1000); //thermometer icon on
+      if (!otherSettings.cool) startHeating();
+      else {
+        //setPointReached = true;
+        coolAirFlag = false;
+        changeSegment(23, 3, 1); //turn thermometer icon on
+        timerTemporary = setTimer;
+        ITimer.attachInterrupt(TIMER_FREQ_HZ, timerHandler);
+        changeSegment(10, 3, 1); //enable S icon
+        timerFlag = true;
+      }
     }
     else { //in base, reset LCD values and set blower to max
       ITimer.detachInterrupt();
       changeSegment(31, 2, 0); //turn off iron icon
-      myPID.SetMode(MANUAL); //turn off PID
-      output = 0;
-      digitalWrite(HEATER, LOW);
-      heating = false;
-      setPointReached = false;
-      setPointChanged = 2;
-      coolingAfterTimer = false;
+      stopHeating();
       if (readTemp(1) > SHUTDOWNTEMP && blowerOn) analogWrite(BLOWER, 100); //turns blower to full if the temperature is above the shutdown temperature and the blower isn't already off after using the timer
+      if (otherSettings.cool) {
+        if (readTemp(1) < SHUTDOWNTEMP) {
+          analogWrite(BLOWER, 0);//turn off blower
+          digitalWrite(HEATER, LOW); //turn off heater, just to be triple safe
+          printOff(0);
+          blowerOn = false;
+        }
+        else coolAirFlag = true;
+      }
       ht.writeMem(23, 0); //turn of temp icon
-      changeSegment(24, 0, 0); //turn off ºC
-      changeSegment(24, 1, 0); //turn off ºF
-      changeSegment(31, 0, 0); //turn off Set
-      changeSegment(31, 1, 1); //turn on fan icon
-      printNumber(LEFT, setBlow); //display set blower percentage
+      if (selectedSection != 4) {
+        changeSegment(24, 0, 0); //turn off ºC
+        changeSegment(24, 1, 0); //turn off ºF
+        changeSegment(31, 0, 0); //turn off Set
+        changeSegment(31, 1, 1); //turn on fan icon
+        printNumber(LEFT, setBlow); //display set blower percentage
+      }
       setPointChanged = 2; // change back to setpoint decreased
       if (setTimer != 0) { //set the timer back to whatever it was before removing handle from base
         printNumber(RIGHT, setTimer);
@@ -435,7 +479,7 @@ void loop() {
     reedFlag = false;
   }
 
-  if (blowerOn && reedStatus && (!timer || timerTemporary > 0) && !coolingAfterTimer) { //Turn the heater on/off to regulate temp
+  if (!otherSettings.cool && blowerOn && reedStatus && (!timer || timerTemporary > 0) && !coolingAfterTimer) { //Turn the heater on/off to regulate temp
     //noInterrupts();
     heat();
     //interrupts();
@@ -468,7 +512,9 @@ void loop() {
 
   millisecs = millis();
   if ((!setPointReached || selectedSection == 4) && blowerOn && (reedStatus || readTemp(1) >= SHUTDOWNTEMP + otherSettings.calTemp) && (selectedSection == 0 || selectedSection == 4) && millisecs - lastTempPrint >= 200 && millisecs - potMillis >= 1000) { //Print real temp to LCD
+    //if (!otherSettings.cool || readTemp(1) >= SHUTDOWNTEMP)
     printNumber(MAIN, calibrateTemp(0));
+    //else printNumber(MAIN, readTemp(otherSettings.tempUnit));
     lastTempPrint = millis();
   }
 
@@ -486,17 +532,19 @@ void loop() {
     lastAnalogCheck = millis();
   }
 
-  if (heating && reedStatus && (setBlow != lastSetBlow)) { //commit new pwm for blower
-    analogWrite(BLOWER, setBlow);
+  if ((heating || otherSettings.cool && blowerOn) && reedStatus && (setBlow != lastSetBlow)) { //commit new pwm for blower
+    analogWrite(BLOWER, map(setBlow, MINBLOW, MAXBLOW, MINDUTYCYCLE, MAXBLOW));
     lastSetBlow = setBlow;
   }
 
-  if (blowerOn && !heating && readTemp(1) < SHUTDOWNTEMP) { //turn blower off
+  if ((!otherSettings.cool || coolAirFlag) && blowerOn && !heating && readTemp(1) < SHUTDOWNTEMP) { //turn blower off
+    coolAirFlag = false;
     analogWrite(BLOWER, 0);//turn off blower
     digitalWrite(HEATER, LOW); //turn off heater, just to be triple safe
-    printNumber(MAIN, setTemp); //display set temp on main section
+    if (!otherSettings.cool) printNumber(MAIN, setTemp); //display set temp on main section
+    else printOff(0);
     blowerOn = false;
-    if (reedStatus) {
+    if (reedStatus || otherSettings.cool) {
       ht.writeMem(23, 0); //turn of temp icon
       changeSegment(24, 0, 0); //turn off ºC
       changeSegment(24, 1, 0); //turn off ºF
@@ -529,43 +577,22 @@ void loop() {
       ht.writeMem(23, current); //write
     }
     else ht.writeMem(23, 0b1000); //turn all segments off
-    if (!selectedSection && !setPointReached) { //toggle between set blower value and set temperature while the station is trying to reach setPoint and no settings section is selected
-      if (switchDisplayed) {
-        changeSegment(24, 0, 0); //turn off ºC
-        changeSegment(24, 1, 0); //turn off ºF
-        changeSegment(31, 0, 1); //turn on Set
-        changeSegment(31, 1, 1); //turn on fan icon
-        printNumber(LEFT, setBlow); //print set blower
-      }
-      else {
-        changeSegment(31, 0, 1); //turn on Set
-        changeSegment(31, 1, 0); //turn off fan icon
-        if (otherSettings.tempUnit) { //turn on ºC
-          changeSegment(24, 1, 0); //turn off ºF
-          changeSegment(24, 0, 1); //turn on ºC
-        }
-        else { //turn on ºF
-          changeSegment(24, 0, 0); //turn off ºC
-          changeSegment(24, 1, 1); //turn on ºF
-        }
-        printNumber(LEFT, setTemp); //print temperature
-      }
-      switchDisplayed = !switchDisplayed;
-    }
+    if (!selectedSection && !setPointReached) toggleLeftDisplay(); //toggle between set blower value and set temperature while the station is trying to reach setPoint and no settings section is selected
     lastTempIcon = millisecs;
   }
 
-  else if (!heating && currentTemp >= MINTEMP && millisecs - lastTempIcon >= 1000) { //decrease thermometer icon segments
+  else if (!heating && (currentTemp >= MINTEMP || (otherSettings.cool && blowerOn)) && millisecs - lastTempIcon >= 1000) { //decrease thermometer icon segments
     int current = ht.readMem(23);
     if (current != 0b1000) {
       current <<= 1;
       ht.writeMem(23, current);
     }
     else ht.writeMem(23, 0b1111);
+    if (otherSettings.cool && reedStatus && !selectedSection) toggleLeftDisplay();
     lastTempIcon = millisecs;
   }
 
-  if (!selectedSection && !setPointReached && heating && millis() - potMillis >= 1000 && ((setPointChanged == 1 && readTemp(otherSettings.tempUnit) <= calibrateTemp(1)) || (setPointChanged == 2 && readTemp(otherSettings.tempUnit) >= calibrateTemp(1))))  {//beep and start counting when setPoint is reached
+  if (!otherSettings.cool && !selectedSection && !setPointReached && heating && millis() - potMillis >= 1000 && ((setPointChanged == 1 && readTemp(otherSettings.tempUnit) <= calibrateTemp(1)) || (setPointChanged == 2 && readTemp(otherSettings.tempUnit) >= calibrateTemp(1))))  {//beep and start counting when setPoint is reached
     setPointReached = true;
     printNumber(MAIN, setTemp); //display set temp on main section
     changeSegment(24, 0, 0); //turn off ºC
@@ -593,9 +620,14 @@ void loop() {
     Serial.write(27);       // ESC command
     Serial.print("[H");     // cursor to home
     Serial.print("Temp: ");
-    if (heating || blowerOn) {
+    if (heating || blowerOn && !otherSettings.cool) {
       if (!setPointReached) Serial.print(calibrateTemp(0));
       else Serial.print(setTemp);
+    }
+    else if (blowerOn && otherSettings.cool) {
+      Serial.print(readTemp(otherSettings.tempUnit));
+      if (otherSettings.tempUnit) Serial.print("ºC");
+      else Serial.print("ºF");
     }
     else Serial.print("OFF");
     Serial.print("/");
@@ -604,6 +636,7 @@ void loop() {
       if (otherSettings.tempUnit) Serial.println("ºC");
       else Serial.println("ºF");
     }
+    else if (otherSettings.cool) Serial.println(F("Air Only"));
     else Serial.println("OFF");
     Serial.print("Blower: ");
     Serial.print(setBlow);
