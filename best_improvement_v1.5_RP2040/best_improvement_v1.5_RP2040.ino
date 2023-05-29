@@ -1,15 +1,14 @@
-//uses core https://github.com/earlephilhower/arduino-pico 
-//Generic RP2040 - USB Stack: Adafruit TinyUSB, other settings leave as default (except for the serial port of course)
+//uses core https://github.com/earlephilhower/arduino-pico tested with version 3.2.1
+//Generic RP2040 - CPU Speed: 125MHz, USB Stack: Adafruit TinyUSB, other settings leave as default (except for the serial port of course)
 
 #include <Wire.h> //for touch ic
 #include <EEPROM.h>
 #include "ht1621.h" //LCD controller https://github.com/altLab/HT1621
 #include "max6675.h" //https://learn.adafruit.com/thermocouple/arduino-code
 #include <PID_v1.h> //https://github.com/br3ttb/Arduino-PID-Library 
-//#define TIMER_INTERRUPT_DEBUG         1
-//#define _TIMERINTERRUPT_LOGLEVEL_     4
 #include "RPi_Pico_TimerInterrupt.h" //https://github.com/khoih-prog/RPI_PICO_TimerInterrupt
 #include <RunningMedian.h> //https://github.com/RobTillaart/RunningMedian
+#include "pico/bootrom.h" //to reset to bootloader mode with reset_usb_boot(0, 0); https://raspberrypi.github.io/pico-sdk-doxygen/group__pico__bootrom.html#ga5d51b6163ec30a147d3445cec8f33c7c
 
 //LCD section addresses
 #define MAIN 17
@@ -45,28 +44,24 @@ HT1621 ht(14, 13, 12, 11); // LCD data,wr,rd,cs
 MAX6675 thermocouple(THERMO_CLK, THERMO_CS, THERMO_DO);
 
 //Miscellaneous
-#define FIRMWARE_VERSION 104 //firmware version (1.04)
+#define FIRMWARE_VERSION 105 //firmware version (1.05)
 #define DEBOUNCETIME 15 //button debounce time
-#define LCDBRIGHTNESS 60 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
-#define LCDBRIGHTNESSDIM 100 //standby brightness
+#define LCDBRIGHTNESS 50 //default brightness, closer to 0 -> brighter, closer to 100 -> dimmer
+#define LCDBRIGHTNESSDIM 90 //standby brightness
 #define MINTEMP 100 //ºC
 #define MAXTEMP 550 //ºC
+#define MINCALRANGE -50 //ºC
+#define MAXCALRANGE 50   //ºC
 #define MINBLOW 1 //displayed value (%)
-#define MINDUTYCYCLE 30 //actual minimum PWM duty cycle (in %), I don't recommend to lower this value as it probably would lower the life of the heating element
+#define MINDUTYCYCLE 35 //actual minimum PWM duty cycle (in %), I don't recommend to lower this value as it probably would lower the life of the heating element
 #define MAXBLOW 100 //displayed and real value (%)
+#define BLOWERBOOST 35 //temporarily adds 35% to the set blower speed while lowering the temperature until reaching the set temperature
 #define SHUTDOWNTEMP 85 //below this temp the blower shuts off (ºC)
 #define SETTINGSEXITTIME 8000 //if you are inside settings (blinking screen), it will automatically exit after this time (ms)
-#define WINDOWSIZE 205 //Heater PWM period size (ms)
+#define WINDOWSIZE 200 //Heater PWM period size (ms)
 #define SERIALTIME 1000 //Serial output time (ms)
 #define TIMER_FREQ_HZ 1
 
-//Calibration factors (so the air that comes OUT OF THE NOZZLE actually reaches the set temperature)
-#define RANGE100 0.92
-#define RANGE150 0.96
-#define RANGE200 1.01
-#define RANGE300 1.03
-#define RANGE400 1.055
-#define RANGE500 1.07
 
 // touch IC address / registers
 #define touchAddress 0x56 // Device address
@@ -83,6 +78,8 @@ unsigned long lastTempPrint;
 unsigned long lastTempRead;
 unsigned long lastTempIcon;
 unsigned long lastSerialOutput;
+unsigned long lastHigh, heaterTempChangeTime;
+bool isHigh;
 volatile bool reedStatus;
 volatile bool btn1, btn2, btn3;
 volatile unsigned long btnMillis, reedMillis;
@@ -114,7 +111,10 @@ volatile unsigned short timerTemporary;
 
 unsigned short heaterVal, blowerVal; //analog pot values for heater and blower
 unsigned short setTemp, setBlow, lastSetBlow, setTimer; //current set values
-float currentTemp;
+unsigned short lastSetTemp;
+float currentTemp, lastTemp;
+byte sameReading; 
+
 
 byte selectedSection;
 unsigned long lastBlink;
@@ -122,6 +122,7 @@ bool sectionOff;
 bool switchDisplayed;
 bool displayingVersion = true;
 bool eepromFlag;
+bool tempLowered, boostingBlower;
 
 struct chSettings {
   unsigned short temp;
@@ -132,22 +133,23 @@ struct otherSettings {
   bool tempUnit; //1 for ºC, 0 for ºF
   bool buzzer;
   byte selectedCh;
-  short calTemp; //temperature calibration value, can be negative or positive
+  short calTemp[5]; //temperature calibration value, can be negative or positive
   bool serialOutput;
   bool cool; //1 for cool air only
+  bool boostBlower; //1 if active (blower boost while lowering temp)
 };
 
 chSettings ch1Settings, ch2Settings, ch3Settings, touchSettings;
 otherSettings otherSettings;
 
-unsigned int eepromCheck = 1234567890; //used in setup to check if settings where previously saved to flash (emulated eeprom)
+unsigned int eepromCheck = 1023456789; //used in setup to check if settings where previously saved to flash (emulated eeprom)
 
 //PID
 //P - how fast it shoots towards set point, if set too high creates overshoot, I - remove oscillations and offset, can increase overshoot D - like a break, removes overshoot, if set too high leads to unresponsiveness
-double setPoint = 0, input = 0, output = 0;
+double setPoint = 0, lastSetPoint, input = 0, output = 0;
 
-double KP = 3.2, KI = 0.17, KD = 1.5; //<400ºC
-double HIGH_KP = 3.2, HIGH_KI = 0.08, HIGH_KD = 0.32; //>=400ºC
+double KP = 3.2, KI = 0.17, KD = 2; //<400ºC
+//double HIGH_KP = 3.2, HIGH_KI = 0.08, HIGH_KD = 0.32; //>=400ºC this is disabled
 
 PID myPID(&input, &output, &setPoint, KP, KI, KD, P_ON_E, DIRECT);
 
@@ -164,7 +166,7 @@ void eepromUpdate() { //(eeprom.put only writes to flash if what's already store
   EEPROM.put(12, ch3Settings);
   EEPROM.put(16, touchSettings);
   EEPROM.put(20, otherSettings);
-  EEPROM.put(30, eepromCheck);
+  EEPROM.put(100, eepromCheck);
   EEPROM.end();
   lastEepromUpdate = millis();
 }
@@ -182,9 +184,14 @@ void loadDefaults() {
   otherSettings.tempUnit = 1;
   otherSettings.buzzer = 1;
   otherSettings.selectedCh = 1;
-  otherSettings.calTemp = 7;
+  otherSettings.calTemp[0] = 3; //up to 199ºC
+  otherSettings.calTemp[1] = 5; //up to 299ºC
+  otherSettings.calTemp[2] = 9; //up to 399ºC
+  otherSettings.calTemp[3] = 13; //up to 499ºC
+  otherSettings.calTemp[4] = 16; //up to 550ºC
   otherSettings.serialOutput = 0;
   otherSettings.cool = 0;
+  otherSettings.boostBlower = 1;
   eepromUpdate();
   Serial.println("Default settings loaded and saved to EEPROM");
   tone(PIEZO, 7000, 300);
@@ -195,6 +202,8 @@ void loadChannelSettings() {
     case 0: //pot
       defineBlower();
       defineTemp();
+      printNumber(MAIN, setTemp);
+      printNumber(LEFT, setBlow);
       break;
     case 1: //ch1
       setTemp = handleTempUnit(ch1Settings.temp, otherSettings.tempUnit);
@@ -252,6 +261,7 @@ void setup() {
   Serial.begin(115200);
   analogWriteFreq(20000); //20kHz PWM freq
   analogWriteRange(100); //because I'm using percentages, this makes it easier
+  analogReadResolution(12); // 12 bit, 0 to 4096
 
   //initialize pins
   pinMode(BACKLIGHT, OUTPUT);   //initialize backlight pin
@@ -268,18 +278,35 @@ void setup() {
   pinMode(REEDINT, INPUT_PULLUP);
   pinMode(TOUCHINT, INPUT);
 
+  //initialize LCD
+  ht.begin();
+  ht.sendCommand(HT1621::BIAS_THIRD_4_COM);
+  ht.sendCommand(HT1621::SYS_EN);
+
+  ht.sendCommand(HT1621::LCD_ON); //turn lcd on
+
+  for (int i = 0 ; i < 32 ; i++) { //turn all LCD segments off
+    ht.writeMem(i, 0);
+  }
+
   bool defaultsLoaded = 0;
   delay(30); //let pins stabilize
   if (!digitalRead(BTN1) && !digitalRead(BTN3)) { //loads default settings if buttons 1 and 3 are pressed simultaneously while powering on the station
     loadDefaults();
     defaultsLoaded = true;
   }
+  else if (!digitalRead(BTN2) && !digitalRead(BTN3)) { //change to usb boot mode to update firmware via .unf file
+    printLetter(21, 'u');
+    printLetter(19, 'p');
+    printLetter(17, 'd');
+    reset_usb_boot(0, 0);
+  }
 
   unsigned int tempEepromCheck;
 
   if (!defaultsLoaded) {
     EEPROM.begin(256);
-    EEPROM.get(30, tempEepromCheck);
+    EEPROM.get(100, tempEepromCheck);
     if (tempEepromCheck == eepromCheck) { //checks if the variable eepromCheck is already stored in flash, if it is,reads the settings else stores them.
       EEPROM.get(4, ch1Settings);
       EEPROM.get(8, ch2Settings);
@@ -292,19 +319,23 @@ void setup() {
     else loadDefaults();
   }
 
-  //initialize LCD
-  ht.begin();
-  ht.sendCommand(HT1621::BIAS_THIRD_4_COM);
-  ht.sendCommand(HT1621::SYS_EN);
-
-  ht.sendCommand(HT1621::LCD_ON); //turn lcd on
-
-  for (int i = 0 ; i < 32 ; i++) { //turn all LCD segments off
-    ht.writeMem(i, 0);
+  if (!digitalRead(BTN1) && !digitalRead(BTN2)) { //enable/disable blower boost while lowering temp feature
+    otherSettings.boostBlower = !otherSettings.boostBlower;
+    eepromUpdate();
+    changeSegment(31, 1, 1); //turn on fan icon
+    if (otherSettings.boostBlower) { //blower boost on
+      printLetter(19, 'o');
+      printLetter(17, 'n');
+    }
+    else {
+      printLetter(21, 'o');
+      printLetter(19, 'f');
+      printLetter(17, 'f');
+    }
+    analogWrite(BACKLIGHT, LCDBRIGHTNESS); //turn on backlight at default brightness
+    delay(1000);
+    while (1) if(digitalRead(BTN1) && digitalRead(BTN2)) rp2040.reboot();
   }
-
-  blowerVal = analogRead(ABLOW);
-  heaterVal = analogRead(AHEAT);
 
   loadChannelSettings();
 
@@ -379,8 +410,11 @@ void setup() {
   myPID.SetOutputLimits(0, WINDOWSIZE); //PWM on time varies between 0ms and 205ms
   myPID.SetSampleTime(150); //PID refresh rate
 
+  delay(200); //let overall voltage stabilize for a better ADC reading
   blowerVal = analogRead(ABLOW);
   heaterVal = analogRead(AHEAT);
+
+  rp2040.wdt_begin(800); //hardware watchdog, reboots MCU if stuck for 800ms
 
 }
 
@@ -421,9 +455,10 @@ void loop() {
     eepromFlag = false;
   }
 
+  
   if (reedFlag) {
     delay(DEBOUNCETIME);
-    reedStatus = digitalRead(REEDINT)                                                                                                                                                ;
+    reedStatus = digitalRead(REEDINT);
     if (reedStatus) { //out of base
       printUnit();
       timerTemporary = setTimer;
@@ -486,6 +521,8 @@ void loop() {
   }
   else digitalWrite(HEATER, LOW);
 
+  if (readTemp(1) >= 670 || !blowerOn && readTemp(1) >= 200 || selectedSection != 4 && heating && ((isHigh && millis() - lastHigh >= 11000) || (setPoint > lastSetPoint && lastSetPoint != 0 && setPointChanged != 1 && millis() - heaterTempChangeTime >= 11000))) tempRunaway(); //thermal runaway protection, if the heating element is at 200ºC and blower is off, if it is at 670ºC no matter what, if heater is set to high for 11 seconds or the station does not reach the setPoint in 11 seconds stops heating and shows error on screen with blower at max speed (note: the last one takes no effect while the station is in the calibration menu)
+
   unsigned long millisecs = millis(); //to avoid wasting time getting millis a milion times
   if (!standby && !reedStatus && !selectedSection && millisecs - touchMillis > 6000 && millisecs - btnMillis > 6000 &&  millisecs - potMillis > 6000) { //Standby
     analogWrite(BACKLIGHT, LCDBRIGHTNESSDIM); //decrease backlight brightness to the default standby value
@@ -511,7 +548,7 @@ void loop() {
   }
 
   millisecs = millis();
-  if ((!setPointReached || selectedSection == 4) && blowerOn && (reedStatus || readTemp(1) >= SHUTDOWNTEMP + otherSettings.calTemp) && (selectedSection == 0 || selectedSection == 4) && millisecs - lastTempPrint >= 200 && millisecs - potMillis >= 1000) { //Print real temp to LCD
+  if ((!setPointReached || selectedSection == 4) && blowerOn && (reedStatus || readTemp(1) >= SHUTDOWNTEMP + otherSettings.calTemp[calibrationArrayIndex()]) && (selectedSection == 0 || selectedSection == 4) && millisecs - lastTempPrint >= 200 && millisecs - potMillis >= 1000) { //Print real temp to LCD
     //if (!otherSettings.cool || readTemp(1) >= SHUTDOWNTEMP)
     printNumber(MAIN, calibrateTemp(0));
     //else printNumber(MAIN, readTemp(otherSettings.tempUnit));
@@ -533,7 +570,10 @@ void loop() {
   }
 
   if ((heating || otherSettings.cool && blowerOn) && reedStatus && (setBlow != lastSetBlow)) { //commit new pwm for blower
-    analogWrite(BLOWER, map(setBlow, MINBLOW, MAXBLOW, MINDUTYCYCLE, MAXBLOW));
+    if (setPointChanged == 1 && selectedSection != 4){
+      blowerBoost(1);
+    }
+    else analogWrite(BLOWER, map(setBlow, MINBLOW, MAXBLOW, MINDUTYCYCLE, MAXBLOW));
     lastSetBlow = setBlow;
   }
 
@@ -592,8 +632,9 @@ void loop() {
     lastTempIcon = millisecs;
   }
 
-  if (!otherSettings.cool && !selectedSection && !setPointReached && heating && millis() - potMillis >= 1000 && ((setPointChanged == 1 && readTemp(otherSettings.tempUnit) <= calibrateTemp(1)) || (setPointChanged == 2 && readTemp(otherSettings.tempUnit) >= calibrateTemp(1))))  {//beep and start counting when setPoint is reached
+  if (!otherSettings.cool && !selectedSection && !setPointReached && heating && millis() - potMillis >= 1000 && ((setPointChanged == 1 && int(readTemp(otherSettings.tempUnit)) <= calibrateTemp(1)) || (setPointChanged == 2 && int(readTemp(otherSettings.tempUnit)) >= calibrateTemp(1))))  {//beep and start counting when setPoint is reached
     setPointReached = true;
+    lastSetPoint = setPoint;
     printNumber(MAIN, setTemp); //display set temp on main section
     changeSegment(24, 0, 0); //turn off ºC
     changeSegment(24, 1, 0); //turn off ºF
@@ -608,6 +649,9 @@ void loop() {
     ITimer.attachInterrupt(TIMER_FREQ_HZ, timerHandler);
     changeSegment(10, 3, 1); //enable S icon
     timerFlag = true;
+    if (setPointChanged == 1)  tempLowered = true; //if temperature decrease set tempLowered to false to give the heater more time to cool down before turning it on again
+    else tempLowered = false;
+    analogWrite(BLOWER, map(setBlow, MINBLOW, MAXBLOW, MINDUTYCYCLE, MAXBLOW)); //lower blower speed back to original set speed
     setPointChanged = false;
     newPotValue = false;
   }
@@ -642,10 +686,9 @@ void loop() {
     Serial.print(setBlow);
     Serial.println("%");
 
-
     //print whatever other variable you want like setTimer, timerTemporary, standby, otherSettings.selectedCh, and so on.
     //make sure you use a real serial terminal for this like putty, arduino serial monitor won't work with the commands
-
     lastSerialOutput = millis();
   }
+  rp2040.wdt_reset(); //reset watchdog timer
 }
