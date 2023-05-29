@@ -54,6 +54,7 @@ bool timerHandler(struct repeating_timer *t) {
         heating = false;
         coolingAfterTimer = true;
         setPointReached = false;
+        heaterTempChangeTime = millis();
         setPointChanged = 2;
         if (otherSettings.cool) coolAirFlag = true;
       }
