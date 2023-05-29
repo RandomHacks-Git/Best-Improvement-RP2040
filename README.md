@@ -15,7 +15,7 @@ You can buy the board on my [tindie store](https://www.tindie.com/stores/randomh
 
 
 ## Required core/libraries to compile
-- [Raspberry Pi Pico Arduino core 1.9.5](https://github.com/earlephilhower/arduino-pico)
+- [Raspberry Pi Pico Arduino core 3.2.1](https://github.com/earlephilhower/arduino-pico)
 - [HT1621 (LCD controller)](https://github.com/altLab/HT1621) 
 - [Adafruit MAX6675 (thermocouple)](https://learn.adafruit.com/thermocouple/arduino-code#arduino-library-2958404-6)
 - [Arduino PID Library](https://github.com/br3ttb/Arduino-PID-Library) 
