@@ -120,7 +120,11 @@ void reactTouch() { //take action according to touched key
       otherSettings.selectedCh = 4;
       lastReact = millis();
       setPointReached = false;
-      if (heating) setPointChanged = 2;
+      heaterTempChangeTime = millis();
+      if (heating){
+        setPointChanged = 2;
+        blowerBoost(0); //reduce blower speed back to original speed if boosted 
+      }
     }
     else if (selectedSection == 2) { //blower
       if (setBlow + stepAmount / 5 < MAXBLOW) setBlow += stepAmount / 5;
@@ -154,27 +158,13 @@ void reactTouch() { //take action according to touched key
       timeUnit = 0;
       lastReact = millis();
     }
-    //    else if (selectedSection == 4) { //timer unit
-    //      if (timeUnit) { //seconds
-    //        changeSegment(10, 2, 0); ////disable M icon
-    //        changeSegment(10, 3, 1); //enable S icon
-    //        timeUnit = 0;
-    //      }
-    //      else { //minutes
-    //        changeSegment(10, 3, 0); ////disable s icon
-    //        changeSegment(10, 2, 1); //enable M icon
-    //        timeUnit = 1;
-    //      }
-    //      touched = false;
-    //      lastReact = millis();
-    //    }
     else if (selectedSection == 4) { //temperature calibration
-      if (otherSettings.calTemp < 50)otherSettings.calTemp += 1;
+      if (otherSettings.calTemp[calibrationArrayIndex()] < MAXCALRANGE)otherSettings.calTemp[calibrationArrayIndex()] += 1;
       else if (otherSettings.buzzer) {
         tone(PIEZO, 1000, 100);
       }
-      if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function, also below
-      else printNumber(LEFT, otherSettings.calTemp * 1.8);
+      if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()]); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function, also below
+      else printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()] * 1.8);
       lastReact = millis();
     }
   }
@@ -198,7 +188,11 @@ void reactTouch() { //take action according to touched key
       otherSettings.selectedCh = 4;
       lastReact = millis();
       setPointReached = false;
-      if (heating) setPointChanged = 1;
+      heaterTempChangeTime = millis();
+      if (heating) {
+        setPointChanged = 1;
+        blowerBoost(1);
+      }
     }
     else if (selectedSection == 2) {
       if (setBlow - stepAmount / 5 > MINBLOW) setBlow -= stepAmount / 5;
@@ -231,27 +225,13 @@ void reactTouch() { //take action according to touched key
       timerTemporary = setTimer;
       lastReact = millis();
     }
-    //    else if (selectedSection == 4) { //timer unit
-    //      if (timeUnit) { //seconds
-    //        changeSegment(10, 2, 0); ////disable M icon
-    //        changeSegment(10, 3, 1); //enable S icon
-    //        timeUnit = 0;
-    //      }
-    //      else { //minutes
-    //        changeSegment(10, 3, 0); ////disable S icon
-    //        changeSegment(10, 2, 1); //enable M icon
-    //        timeUnit = 1;
-    //      }
-    //      touched = false;
-    //      lastReact = millis();
-    //    }
     else if (selectedSection == 4) { //temperature calibration
-      if (otherSettings.calTemp > -50) otherSettings.calTemp -= 1;
+      if (otherSettings.calTemp[calibrationArrayIndex()] > MINCALRANGE) otherSettings.calTemp[calibrationArrayIndex()] -= 1;
       else if (otherSettings.buzzer) {
         tone(PIEZO, 1000, 100);
       }
-      if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function
-      else printNumber(LEFT, otherSettings.calTemp * 1.8);
+      if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()]); //replace two lines with function? this code is repeated in lcdStuff tab - blinkSelection function
+      else printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()] * 1.8);
       lastReact = millis();
     }
   }
@@ -265,6 +245,7 @@ void reactTouch() { //take action according to touched key
         changeSegment(24, 0, 1); //turn on ºC
       }
       setTemp = convertToC(setTemp); //convert to ºC
+      printNumber(MAIN, setTemp);
     }
     else { //change to ºF
       changeSegment(10, 0, 0);
@@ -274,6 +255,7 @@ void reactTouch() { //take action according to touched key
         changeSegment(24, 1, 1); //turn on ºF
       }
       setTemp = handleTempUnit(setTemp, 0); //convert to ºF
+      printNumber(MAIN, setTemp);
     }
     converted = true;
     if (!otherSettings.cool && !selectedSection) printNumber(MAIN, setTemp);
@@ -305,7 +287,7 @@ void reactTouch() { //take action according to touched key
       changeSegment(24, 2, 0); //turn off Cal. icon
       changeSegment(24, 0, 0); //turn off ºC
       changeSegment(24, 1, 0); //turn off ºF
-      eepromFlag = true;;
+      eepromFlag = true;
     }
     if (otherSettings.buzzer) {
       tone(PIEZO, 1000, 100);
@@ -343,12 +325,16 @@ void handleButton() {
         }
         printNumber(LEFT, ch1Settings.blow);
         if (!otherSettings.cool && convertToC(setTemp) > ch1Settings.temp && heating) setPointChanged = 1;
-        else setPointChanged = 2;
+        else {
+          setPointChanged = 2;
+          blowerBoost(0); //reduce blower speed back to original speed if boosted 
+        }
         setTemp = handleTempUnit(ch1Settings.temp, otherSettings.tempUnit);
         setBlow = ch1Settings.blow;
         eepromFlag = true;
       }
       setPointReached = false;
+      heaterTempChangeTime = millis();
       buttonFlag = false;
       btn1 = 0;
     }
@@ -394,12 +380,16 @@ void handleButton() {
         }
         printNumber(LEFT, ch2Settings.blow);
         if (!otherSettings.cool && convertToC(setTemp) > ch2Settings.temp && heating) setPointChanged = 1;
-        else setPointChanged = 2;
+        else {
+          setPointChanged = 2;
+          blowerBoost(0); //reduce blower speed back to original speed if boosted 
+        }
         setTemp = handleTempUnit(ch2Settings.temp, otherSettings.tempUnit);
         setBlow = ch2Settings.blow;
         eepromFlag = true;;
       }
       setPointReached = false;
+      heaterTempChangeTime = millis();
       buttonFlag = false;
       btn2 = 0;
     }
@@ -445,12 +435,16 @@ void handleButton() {
         }
         printNumber(LEFT, ch3Settings.blow);
         if (!otherSettings.cool && convertToC(setTemp) > ch3Settings.temp && heating) setPointChanged = 1;
-        else setPointChanged = 2;
+        else {
+          setPointChanged = 2;
+          blowerBoost(0); //reduce blower speed back to original speed if boosted 
+        }
         setTemp = handleTempUnit(ch3Settings.temp, otherSettings.tempUnit);
         setBlow = ch3Settings.blow;
         eepromFlag = true;;
       }
       setPointReached = false;
+      heaterTempChangeTime = millis();
       buttonFlag = false;
       btn3 = 0;
     }
@@ -509,10 +503,17 @@ void defineTemp() {
     }
     if (heating) {
       if (setTemp != tempMap) {
-        if (setTemp > tempMap) setPointChanged = 1;
-        else setPointChanged = 2;
+        if (setTemp > tempMap) {
+          setPointChanged = 1;
+          if (selectedSection != 4) blowerBoost(1); //don't boost blower while in calibration menu
+        }
+        else {
+          setPointChanged = 2;
+          blowerBoost(0); //reduce blower speed back to original speed if boosted 
+        }
         //Serial.println(setPointChanged);
         setPointReached = false;
+        heaterTempChangeTime = millis();
       }
     }
     if (tempMap < handleTempUnit(MINTEMP, otherSettings.tempUnit)) setTemp = handleTempUnit(MINTEMP, otherSettings.tempUnit);
