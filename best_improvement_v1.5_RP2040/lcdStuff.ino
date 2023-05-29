@@ -65,7 +65,7 @@ byte printNumber(byte section, short number) {
     else if (section == LEFT) {
       digitPrint(25, units);
       digitPrint(27, tens);
-      if (selectedSection == 4 && handleTempUnit(otherSettings.calTemp, otherSettings.tempUnit) < 0) changeSegment(30, 1, 1); //enable negative sign
+      if (selectedSection == 4 && handleTempUnit(otherSettings.calTemp[calibrationArrayIndex()], otherSettings.tempUnit) < 0) changeSegment(30, 1, 1); //enable negative sign
     }
     else if (section == RIGHT) {
       digitPrint(11, units);
@@ -85,7 +85,7 @@ byte printNumber(byte section, short number) {
     }
     else if (section == LEFT) {
       digitPrint(25, units);
-      if (selectedSection == 4 && otherSettings.calTemp < 0) changeSegment(28, 1, 1); //enable negative sign
+      if (selectedSection == 4 && otherSettings.calTemp[calibrationArrayIndex()] < 0) changeSegment(28, 1, 1); //enable negative sign
     }
     else if (section == RIGHT) {
       digitPrint(11, units);
@@ -160,6 +160,7 @@ void printText(byte address, char text[], bool loopText) { //this function is bl
       if (i > 1) printLetter(address + 4, text[i - 2]); //shift letter to next 7 segments on the left like ■ab -> abc if text[i] = c
       //Serial.println(text[i]);
       delay(200);
+      rp2040.wdt_reset(); //reset watchdog timer
     }
   } while (loopText);
 }
@@ -394,26 +395,7 @@ void blinkSelection() {
       }
       lastBlink = millis();
       break;
-    //    case 4:
-    //      printNumber(RIGHT, setTimer);
-    //      if (!sectionOff) {
-    //        changeSegment(10, 2, 0); ////disable M icon
-    //        changeSegment(10, 3, 0); //disable S icon
-    //        sectionOff = true;
-    //      }
-    //      else {
-    //        if (timeUnit) {
-    //          changeSegment(10, 2, 0); ////disable M icon
-    //          changeSegment(10, 3, 1); //enable S icon
-    //        }
-    //        else {
-    //          changeSegment(10, 3, 0); ////disable S icon
-    //          changeSegment(10, 2, 1); //enable M icon
-    //        }
-    //        sectionOff = false;
-    //      }
-    //      lastBlink = millis();
-    //      break;
+
     case 4:
       if (!sectionOff) {
         for (byte i = 25; i < 31; i++) {
@@ -422,8 +404,8 @@ void blinkSelection() {
         sectionOff = true;
       }
       else {
-        if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp);
-        else printNumber(LEFT, otherSettings.calTemp * 1.8);
+        if (otherSettings.tempUnit) printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()]);
+        else printNumber(LEFT, otherSettings.calTemp[calibrationArrayIndex()] * 1.8);
         //printNumber(LEFT, handleTempUnit(otherSettings.calTemp, otherSettings.tempUnit));
         //handle CF icon function thingymabob
         sectionOff = false;
@@ -447,7 +429,6 @@ void stopBlinking() {
     else {
       ht.writeMem(11, 0); //disable timer section
       ht.writeMem(12, 0);
-      //changeSegment(10, 2, 0); //disable M icon
       changeSegment(10, 3, 0); //disable S icon
     }
   }
